@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(php --version)",
+      "PowerShell(composer --version)",
+      "PowerShell(node --version)",
+      "PowerShell(npm --version)",
+      "PowerShell(git config --global safe.bareRepository all)",
+      "Read(//c/laragon/bin/php/php-8.3.30-Win32-vs16-x64/**)",
+      "Bash(ls \"c:/laragon/bin/mysql/\" 2>/dev/null || echo \"checking mysql path\")",
+      "Read(//c/laragon/bin/mysql/**)",
+      "PowerShell(& \"c:\\\\laragon\\\\bin\\\\mysql\\\\mysql-8.4.3-winx64\\\\bin\\\\mysql.exe\" -u root -e \"CREATE DATABASE IF NOT EXISTS msme_risk_tracker CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; SHOW DATABASES;\" 2>&1)",
+      "PowerShell(cd \"c:\\\\laragon\\\\www\\\\msme-pament-risk-tracker\"; composer require filament/filament:\"^3.3\" --ignore-platform-reqs --no-interaction --audit-format plain 2>&1; Write-Host \"EXIT: $LASTEXITCODE\")"
+    ],
+    "additionalDirectories": [
+      "C:\\laragon\\bin\\php\\php-8.3.30-Win32-vs16-x64"
+    ]
+  }
+}
