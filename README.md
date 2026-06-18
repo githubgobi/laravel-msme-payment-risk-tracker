@@ -1,58 +1,278 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# MSME Payment Risk Tracker
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+**Section 43B(h) Compliance — Don't lose your tax deduction.**
 
-## About Laravel
+A production-grade SaaS application that helps Indian businesses track payment deadlines to Udyam-registered Micro/Small suppliers, prevent tax disallowance under Section 43B(h) of the Income Tax Act, and automate alerts before deadlines are missed.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Business Problem
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+Under Section 43B(h), if a buyer does not pay a Udyam-registered Micro/Small supplier within:
+- **15 days** — when no written agreement exists
+- **45 days** — when a written agreement exists (maximum under MSME Act)
 
-## Learning Laravel
+...the unpaid expense is **disallowed** and added back to taxable income, plus **non-deductible compound interest at 3× the RBI bank rate** (~18–19% p.a. at the current 6.75% bank rate), compounded monthly.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+Most SMEs track this in Excel and discover exposure only at March year-end. A single missed deadline on a ₹50 lakh invoice can add ₹15–20 lakh to the tax bill.
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+---
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+## Target Customers
 
-## Agentic Development
+- Finance/accounts managers and proprietors at Indian businesses with ₹5cr–₹100cr turnover
+- Manufacturing, trading, and textile companies buying from many small vendors
+- CA firms managing payables for multiple clients (white-label multi-client dashboard)
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+---
 
-```bash
-composer require laravel/boost --dev
+## Revenue Model
 
-php artisan boost:install
+| Plan | Price | Vendor Limit |
+|---|---|---|
+| Starter | ₹1,500/mo | Up to 50 vendors |
+| Growth | ₹3,000/mo | Up to 200 vendors |
+| CA Firm | ₹4,000/mo | Up to 10 client businesses |
+
+Target: 150 customers → ₹3–6 lakh/month. 400 customers → ₹8–12 lakh/month.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Laravel 13 (PHP 8.3) |
+| Admin Panel | Filament v5.6.7 |
+| Frontend | Livewire v4, Blade, Tailwind CSS |
+| Database | MySQL 8.4 |
+| Queue | Laravel Queue (database driver local / Redis in production) |
+| Import | maatwebsite/excel v3 (CSV/Excel), custom XML parser (Tally) |
+| AI / LLM | Ollama + Qwen2.5 (local, vendor name fuzzy matching) |
+| Alerts | Laravel Mail + WhatsApp via AiSensy/Interakt |
+| Udyam Verify | Surepass API / Figment API (manual tagging for MVP) |
+| Dev Server | Laragon (Windows) |
+| Production | Ubuntu 24.04 + Nginx + PHP-FPM + Supervisor |
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  Browser / Mobile                    │
+└──────────────────────┬──────────────────────────────┘
+                       │ HTTPS
+┌──────────────────────▼──────────────────────────────┐
+│             Filament Admin Panel (/admin)            │
+│          Livewire Components (reactive UI)           │
+└──────────────────────┬──────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────┐
+│                  Service Layer                       │
+│  MsmeDeadlineEngine  │  ImportPipeline              │
+│  DisallowanceCalc    │  VendorMatcher (Ollama)       │
+│  AlertDispatcher     │  UdyamVerifier               │
+└──────────────────────┬──────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────┐
+│              Repository Layer                        │
+│  InvoiceRepository  │  VendorRepository             │
+│  PaymentRepository  │  TenantRepository             │
+└──────────────────────┬──────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────┐
+│                   MySQL 8.4                          │
+│  tenants │ vendors │ purchase_invoices │ payments   │
+│  import_batches │ alert_log │ audit_log             │
+└─────────────────────────────────────────────────────┘
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+---
 
-## Contributing
+## Engineering Standards
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Every feature is built after a full multi-disciplinary architecture review covering:
 
-## Code of Conduct
+- Business, functional, and non-functional requirements
+- User journeys, roles, permissions, edge cases, failure scenarios
+- SOLID principles, Clean Architecture, Repository + Service Layer Pattern
+- OWASP Top 10 security compliance (SQLi, XSS, CSRF, SSRF, IDOR)
+- Minimum **90% code coverage**, **100% on critical business logic** (rules engine)
+- Production-ready — no prototypes, no incomplete implementations
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+Self-review gate before every delivery: Database Architect → Technical Architect → Security Architect → DevOps Architect → QA Architect → Performance Engineer.
 
-## Security Vulnerabilities
+---
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## Phases
+
+---
+
+### Phase 0 — Environment Setup & Scaffold ✅
+
+**Completed:** 2026-06-18
+
+#### Objectives
+Bootstrap production-grade Laravel project with correct stack, configure MySQL and Filament admin panel, initialize git with remote.
+
+#### Requirements Addressed
+- Laravel 13.16.1 project scaffolded with PHP 8.3
+- MySQL 8.4 database `msme_risk_tracker` created with `utf8mb4_unicode_ci` collation
+- Filament v5.6.7 admin panel installed at `/admin`
+- Livewire v4.3.1 installed (required by Filament v5)
+- maatwebsite/excel v3 installed for CSV/Excel import
+- Guzzle v7 installed for HTTP client (Udyam API, WhatsApp API)
+- Vite frontend assets compiled
+- Git initialized and pushed to GitHub
+
+#### Architecture Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| Admin panel | Filament v5.6.7 | v3 has active security advisory; v5 is patched and stable |
+| Livewire version | v4.3.1 | Required by Filament v5 (not v3) |
+| Multi-tenancy strategy | Single-database (`tenant_id` scoped globally) | Simpler at current scale (<1,000 tenants), lower ops overhead |
+| Session driver (local) | `file` | `database` driver caused 4–6 extra MySQL queries per request |
+| Cache driver (local) | `file` | Filament caches heavily; database driver was bottleneck |
+| Redis client | `predis` | `phpredis` PHP extension not installed in this Laragon setup |
+
+#### Configuration Changes
+
+| Key | Value | Reason |
+|---|---|---|
+| `SESSION_DRIVER` | `file` | Eliminates per-request MySQL session queries in local dev |
+| `CACHE_STORE` | `file` | Eliminates per-request MySQL cache queries in local dev |
+| `REDIS_CLIENT` | `predis` | `phpredis` extension absent — `predis` is pure PHP fallback |
+| `APP_URL` | `http://msme-pament-risk-tracker.test` | Laragon local domain |
+| `APP_FAKER_LOCALE` | `en_IN` | Indian locale for realistic test data |
+
+#### PHP Extensions Enabled
+- `extension=zip` in `php.ini` — was commented out; required by Composer for package extraction
+
+#### Dependencies Added
+
+| Package | Version | Purpose |
+|---|---|---|
+| `filament/filament` | v5.6.7 | Admin panel, tables, forms, widgets |
+| `livewire/livewire` | v4.3.1 | Reactive UI (installed as Filament dependency) |
+| `maatwebsite/excel` | ^3.1 | CSV/Excel ledger import |
+| `guzzlehttp/guzzle` | ^7.8 | HTTP client for Udyam/WhatsApp APIs |
+
+#### Database Migrations Run
+| Migration | Purpose |
+|---|---|
+| `create_users_table` | Base auth |
+| `create_cache_table` | Framework cache |
+| `create_jobs_table` | Queue jobs |
+
+#### Admin Credentials (Local Only)
+- URL: `http://msme-pament-risk-tracker.test/admin`
+- Email: `admin@msme.local`
+- Password: `admin123` *(change before any shared or staging environment)*
+
+#### Known Limitations / Deferred
+- No multi-tenancy scaffolding yet → Phase 1
+- No RBAC yet → Phase 1
+- Redis not configured for production queue → Phase 9
+- Ollama/Qwen LLM not yet integrated → Phase 4
+
+---
+
+### Phase 1 — Database Architecture *(In Progress)*
+
+---
+
+### Phase 2 — Core Rules Engine *(Planned)*
+
+---
+
+### Phase 3 — Import Pipeline — CSV & Tally XML *(Planned)*
+
+---
+
+### Phase 4 — Vendor Classification & Udyam Verification *(Planned)*
+
+---
+
+### Phase 5 — Dashboard UI *(Planned)*
+
+---
+
+### Phase 6 — Alerts System — Email & WhatsApp *(Planned)*
+
+---
+
+### Phase 7 — Multi-Tenancy & Billing *(Planned)*
+
+---
+
+### Phase 8 — Testing *(Planned)*
+
+---
+
+### Phase 9 — Deployment *(Planned)*
+
+---
+
+### Phase 10 — Client Delivery & Onboarding *(Planned)*
+
+---
+
+## Local Development Setup
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/githubgobi/laravel-msme-payment-risk-tracker.git
+cd laravel-msme-payment-risk-tracker
+
+# 2. Install PHP dependencies
+composer install
+
+# 3. Install Node dependencies
+npm install
+
+# 4. Copy environment file and configure
+cp .env.example .env
+php artisan key:generate
+
+# 5. Create MySQL database
+mysql -u root -e "CREATE DATABASE msme_risk_tracker CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+# 6. Run migrations
+php artisan migrate
+
+# 7. Build frontend assets
+npm run build
+
+# 8. Access admin panel
+# http://msme-pament-risk-tracker.test/admin
+```
+
+### .env Quick Reference (local dev)
+
+```env
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=msme_risk_tracker
+DB_USERNAME=root
+DB_PASSWORD=
+
+SESSION_DRIVER=file
+CACHE_STORE=file
+QUEUE_CONNECTION=database
+REDIS_CLIENT=predis
+```
+
+---
+
+## Repository
+
+GitHub: [githubgobi/laravel-msme-payment-risk-tracker](https://github.com/githubgobi/laravel-msme-payment-risk-tracker)
+
+---
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+Proprietary. All rights reserved.
