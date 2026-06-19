@@ -41,4 +41,13 @@ return [
         'token' => env('SUREPASS_API_KEY'),
     ],
 
+    // AiSensy — WhatsApp Business API (India)
+    // Get your key at: https://aisensy.com
+    // Template name must be pre-approved: msme_43bh_alert
+    'aisensy' => [
+        'key'           => env('AISENSY_API_KEY'),
+        'campaign_name' => env('AISENSY_CAMPAIGN_NAME', 'msme_43bh_alert'),
+        'user_name'     => env('AISENSY_USER_NAME', 'MSME Tracker'),
+    ],
+
 ];

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AlertController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ImportController;
 use App\Http\Controllers\UdyamVerificationController;
@@ -55,8 +56,11 @@ Route::middleware('auth')->group(function () {
     Route::post('/udyam/verify',                [UdyamVerificationController::class, 'verify'])->name('udyam.verify');
     Route::get('/invoices',   fn () => Inertia::render('Invoices/Index'))->name('invoices.index');
     Route::get('/payments',   fn () => Inertia::render('Payments/Index'))->name('payments.index');
-    Route::get('/alerts',     fn () => Inertia::render('Alerts/Index'))->name('alerts.index');
     Route::get('/calculator', fn () => Inertia::render('Calculator/Index'))->name('calculator.index');
+
+    // Alert routes (settings must come before any future {alert} wildcard)
+    Route::get('/alerts',             [AlertController::class, 'index'])->name('alerts.index');
+    Route::put('/alerts/settings',    [AlertController::class, 'updateSettings'])->name('alerts.settings');
 
     // Import routes
     Route::get('/import',                       [ImportController::class, 'index'])->name('import.index');

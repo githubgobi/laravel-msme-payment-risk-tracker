@@ -15,6 +15,8 @@ class AlertLog extends Model
 {
     use HasFactory, HasTenant, SoftDeletes;
 
+    protected $table = 'alert_log';
+
     protected $fillable = [
         'tenant_id',
         'invoice_id',

@@ -795,7 +795,180 @@ Test coverage:
 
 ---
 
-### Phase 6 — Alerts System — Email & WhatsApp *(Planned)*
+### Phase 6 — Alerts System — Email & WhatsApp ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Send proactive 43B(h) deadline alerts to finance managers via Email and WhatsApp before payment deadlines are missed. Deduplication prevents repeated alerts within the same day.
+
+#### Architecture Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| `AlertDispatcherService` is console-safe | All queries use `withoutGlobalScopes()` + explicit `tenant_id` | Console context has no auth → TenantScope doesn't apply; must filter manually |
+| Alert log created BEFORE job dispatch | AlertLog (status=pending) → `SendAlertJob` reads from it | Gives a DB record of every intended dispatch, even if the job fails |
+| Deduplication window | Same `(invoice_id, alert_type, channel)` on the same calendar day | T10/T3 don't repeat — invoice moves out of the [+8,+10]/[+1,+3] window by next day; overdue dedupes daily |
+| WhatsApp via AiSensy | AiSensy Business API (POST to backend.aisensy.com/campaign) | India-first, pre-approved template messaging, reliable delivery |
+| WhatsApp degrades gracefully | Missing `AISENSY_API_KEY` → job catches and marks AlertLog as failed | Doesn't block email; missing key is common in dev environments |
+| Tenant alert settings | Stored in `tenants.settings['alerts']` JSON | No new migration; settings are per-tenant and change rarely |
+| Email fallback recipients | If `email_recipients` is empty → use all active users' emails | Finance team set up in Users already; no redundant config needed |
+| `YearEndSummary` alert type | Manual-only — artisan command doesn't auto-dispatch it | Year-end summary requires business judgement on timing; not automated |
+
+#### Alert Types and Windows
+
+| Alert Type | Trigger Condition | Cadence |
+|---|---|---|
+| `T10Warning` | Invoice deadline in [+8, +10] days, status = pending/partial | Once per invoice (moves out of window) |
+| `T3Urgent` | Invoice deadline in [+1, +3] days, status = pending/partial | Once per invoice (moves out of window) |
+| `Overdue` | Status = overdue, deadline < today | Daily (dedup prevents same-day repeats) |
+| `YearEndSummary` | Manual trigger only | On demand |
+
+#### Alert Dispatch Flow
+
+```
+php artisan msme:send-alerts [--tenant=N] [--as-of=YYYY-MM-DD] [--dry-run]
+  → AlertDispatcherService::dispatchForTenant(tenant)
+     → resolveChannels(settings)  → [Email → recipients] + [WhatsApp → phone]
+     → resolveTypes(settings)     → [T10Warning, T3Urgent, Overdue] (per toggles)
+     → For each type:
+         qualifyingInvoices(tenant, type, today)
+         → For each invoice × channel:
+              alreadySentToday? → skip (skipped++)
+              : AlertLog::create(status=pending)
+              : SendAlertJob::dispatch(alertLog)
+                 → EmailAlertChannel::send()   → Mail::to(recipient)
+                 → WhatsAppAlertChannel::send() → POST AiSensy API
+                 → Update AlertLog: status=sent, sent_at, provider_message_id
+                 → On failure: status=failed, failed_reason (re-throws for 3 retries)
+```
+
+#### Files Created
+
+| File | Purpose |
+|---|---|
+| `app/Services/Alerts/AlertChannelInterface.php` | Interface for swappable channel implementations |
+| `app/Services/Alerts/EmailAlertChannel.php` | Sends via `Mail::to()` with InvoiceAlertMail |
+| `app/Services/Alerts/WhatsAppAlertChannel.php` | POST to AiSensy API with 5 template params |
+| `app/Services/AlertDispatcherService.php` | Core service: resolves channels/types, dedupes, creates AlertLog, dispatches jobs |
+| `app/Mail/InvoiceAlertMail.php` | Laravel Mailable — computes balance, daysText, totalExposure for template |
+| `resources/views/emails/invoice-alert.blade.php` | Markdown email — invoice details, tax risk table, call-to-action button |
+| `app/Jobs/SendAlertJob.php` | Queued job (tries=3, timeout=30s) — sends via channel, updates AlertLog |
+| `app/Console/Commands/SendMsmeAlerts.php` | `msme:send-alerts` command with `--tenant`, `--as-of`, `--dry-run` options |
+| `app/Http/Requests/UpdateAlertSettingsRequest.php` | Validates email_recipients (max:10, each valid email), whatsapp_number (E.164) |
+| `app/Http/Controllers/AlertController.php` | `index()` (paginated history + filters) + `updateSettings()` |
+| `resources/js/Pages/Alerts/Index.vue` | Two-tab UI: History (table with filters) + Settings (toggle form) |
+| `tests/Feature/AlertDispatcherServiceTest.php` | 12 feature tests — window qualification, dedup, channel resolution, tenant isolation |
+| `tests/Feature/AlertControllerTest.php` | 11 feature tests — auth, Inertia rendering, tenant isolation, settings CRUD |
+
+#### AlertLog Model Fix
+
+Added `protected $table = 'alert_log'` — Laravel auto-pluralizes to `alert_logs` but the actual table is `alert_log` (matches migration).
+
+#### Routes Added
+
+| Method | Path | Handler |
+|---|---|---|
+| GET | `/alerts` | `AlertController@index` |
+| PUT | `/alerts/settings` | `AlertController@updateSettings` |
+
+#### Configuration Added
+
+```env
+# .env — add your AiSensy API key for WhatsApp alerts
+AISENSY_API_KEY=your_api_key_here
+AISENSY_CAMPAIGN_NAME=msme_43bh_alert     # pre-approved WhatsApp template
+AISENSY_USER_NAME=MSME Tracker            # sender display name
+```
+
+```php
+// config/services.php
+'aisensy' => [
+    'key'           => env('AISENSY_API_KEY'),
+    'campaign_name' => env('AISENSY_CAMPAIGN_NAME', 'msme_43bh_alert'),
+    'user_name'     => env('AISENSY_USER_NAME', 'MSME Tracker'),
+],
+```
+
+#### WhatsApp Template (AiSensy — must be pre-approved)
+
+Template name: `msme_43bh_alert`
+Parameters:
+1. `{{1}}` — vendor name
+2. `{{2}}` — balance amount (₹)
+3. `{{3}}` — deadline date
+4. `{{4}}` — days remaining / overdue text
+5. `{{5}}` — disallowance amount (₹)
+
+#### Artisan Command Usage
+
+```bash
+# Run for all active tenants (use in cron, runs daily)
+php artisan msme:send-alerts
+
+# Single tenant
+php artisan msme:send-alerts --tenant=1
+
+# Backdate testing
+php artisan msme:send-alerts --as-of=2025-03-28
+
+# Preview what would be dispatched without actually sending
+php artisan msme:send-alerts --dry-run
+```
+
+#### Alert Settings (stored in tenants.settings JSON)
+
+```json
+{
+  "alerts": {
+    "email_enabled": true,
+    "email_recipients": ["finance@company.com"],
+    "whatsapp_enabled": false,
+    "whatsapp_number": "+919876543210",
+    "t10_enabled": true,
+    "t3_enabled": true,
+    "overdue_enabled": true
+  }
+}
+```
+
+#### Test Results
+
+```
+Phase 6 tests: 27 (AlertDispatcherServiceTest: 12, AlertControllerTest: 11, + 4 others)
+Full suite:    205 tests / 205 passing / 678 assertions
+Duration:      ~5.7s (SQLite in-memory)
+
+Key scenarios covered:
+  - T10 window [+8,+10]: invoice at +9 qualifies, +11 does not
+  - T3 window [+1,+3]: invoice at +2 qualifies, +4 does not
+  - Overdue: status=overdue + deadline in past qualifies
+  - Paid invoice: never qualifies for any alert type
+  - YearEndSummary: always returns empty (manual-only)
+  - Deduplication: same invoice+type+channel today → skipped
+  - Email disabled: no channels → 0 dispatched
+  - WhatsApp added: 1 invoice × 2 channels → 2 dispatched
+  - t10_enabled=false: T10 invoices skipped
+  - Empty email_recipients: fallback to all active users' emails
+  - Cross-tenant: other tenant's invoices invisible
+  - Auth required on all routes
+  - TenantScope: other tenant's alert logs hidden
+  - Settings update: persists to tenant.settings['alerts']
+  - Settings update: preserves other tenant.settings keys
+  - Validation: invalid email → error, invalid phone → error
+```
+
+#### Known Limitations / Deferred
+
+| Item | Deferred to |
+|---|---|
+| SMS channel (AlertChannel::Sms) | Phase 9 |
+| WhatsApp delivery webhooks (mark Delivered) | Phase 9 |
+| YearEndSummary manual send UI | Phase 7 |
+| Scheduler registration in `routes/console.php` | Phase 9 (deployment) |
+| Per-user alert preferences (not just tenant-level) | Phase 7 |
+
+---
 
 ---
 
