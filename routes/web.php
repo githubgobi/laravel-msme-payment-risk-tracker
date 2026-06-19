@@ -75,7 +75,7 @@ Route::middleware('auth')->group(function () {
 });
 
 // Authenticated + active-tenant routes
-Route::middleware(['auth', 'tenant.active', 'onboarding'])->group(function () {
+Route::middleware(['auth', 'tenant.user', 'tenant.active', 'onboarding'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     // Vendor routes (static paths must come before {vendor} wildcard)

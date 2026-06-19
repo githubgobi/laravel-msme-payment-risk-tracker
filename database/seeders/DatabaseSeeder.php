@@ -18,36 +18,90 @@ use Carbon\Carbon;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 
+/**
+ * Full demo seed covering every testable scenario:
+ *
+ *  ┌─────────────────────────────────────────────────────────────────────┐
+ *  │  CREDENTIALS CHEAT SHEET                                           │
+ *  ├────────────────────────────────┬────────────────────────────────────┤
+ *  │  Role / Account                │  Email / Password                  │
+ *  ├────────────────────────────────┼────────────────────────────────────┤
+ *  │  Super Admin                   │  superadmin@msme.local / Admin@1234│
+ *  │  Filament panel → /admin       │                                    │
+ *  ├────────────────────────────────┼────────────────────────────────────┤
+ *  │  Arjun Textiles — Owner        │  arjun@arjuntextiles.com / password│
+ *  │  Arjun Textiles — Admin        │  admin@arjuntextiles.com / password│
+ *  │  Arjun Textiles — Finance Mgr  │  priya@arjuntextiles.com / password│
+ *  │  Arjun Textiles — Viewer       │  viewer@arjuntextiles.com / password│
+ *  │  (Starter plan, Active, full data)                                 │
+ *  ├────────────────────────────────┼────────────────────────────────────┤
+ *  │  Rajesh & Associates — Owner   │  rajesh@rajeshca.com / password    │
+ *  │  Rajesh & Associates — Finance │  accounts@rajeshca.com / password  │
+ *  │  (Growth plan, Trial — 10 days left)                               │
+ *  ├────────────────────────────────┼────────────────────────────────────┤
+ *  │  Sharma Enterprises — Owner    │  sharma@sharmaent.com / password   │
+ *  │  (Starter plan, Suspended — tests access-blocked UI)              │
+ *  ├────────────────────────────────┼────────────────────────────────────┤
+ *  │  Global CA Partners — Owner    │  admin@globalca.com / password     │
+ *  │  Global CA Partners — Admin    │  manager@globalca.com / password   │
+ *  │  Global CA Partners — Finance  │  finance@globalca.com / password   │
+ *  │  Global CA Partners — Viewer   │  viewer@globalca.com / password    │
+ *  │  (CA Firm plan, Active, multi-user scenario)                       │
+ *  └────────────────────────────────┴────────────────────────────────────┘
+ */
 class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
+        $this->seedSuperAdmin();
         $this->seedArjunTextiles();
         $this->seedRajeshAssociates();
+        $this->seedSharmaEnterprises();
+        $this->seedGlobalCaPartners();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Tenant 1 — Arjun Textiles Pvt Ltd (Starter plan, Active)
+    // Super Admin — no tenant, Filament /admin panel only
+    // Login: superadmin@msme.local / Admin@1234
+    // ─────────────────────────────────────────────────────────────────────────
+    private function seedSuperAdmin(): void
+    {
+        User::create([
+            'tenant_id' => null,
+            'name'      => 'Platform Super Admin',
+            'email'     => 'superadmin@msme.local',
+            'password'  => Hash::make('Admin@1234'),
+            'role'      => UserRole::Owner->value,
+            'is_active' => true,
+        ]);
+
+        $this->command->info('  [SUPER ADMIN]  superadmin@msme.local / Admin@1234  →  /admin');
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Tenant 1 — Arjun Textiles Pvt Ltd
+    // Plan: Starter | Status: Active | All 4 user roles | Rich invoice data
     // ─────────────────────────────────────────────────────────────────────────
     private function seedArjunTextiles(): void
     {
         $tenant = Tenant::create([
-            'name'                  => 'Arjun Textiles Pvt Ltd',
-            'email'                 => 'accounts@arjuntextiles.com',
-            'phone'                 => '+911122334455',
-            'gstin'                 => '29AADCA8719Q1Z3',
-            'pan'                   => 'AADCA8719Q',
-            'state'                 => 'Karnataka',
-            'city'                  => 'Bengaluru',
-            'address'               => '14, Industrial Estate, Peenya, Bengaluru 560058',
-            'plan'                  => TenantPlan::Starter->value,
-            'subscription_status'   => TenantStatus::Active->value,
-            'subscription_ends_at'  => now()->addYear(),
-            'rbi_bank_rate'         => 6.75,
-            'is_active'             => true,
-            'settings'              => [
+            'name'                   => 'Arjun Textiles Pvt Ltd',
+            'email'                  => 'accounts@arjuntextiles.com',
+            'phone'                  => '+911122334455',
+            'gstin'                  => '29AADCA8719Q1Z3',
+            'pan'                    => 'AADCA8719Q',
+            'state'                  => 'Karnataka',
+            'city'                   => 'Bengaluru',
+            'address'                => '14, Industrial Estate, Peenya, Bengaluru 560058',
+            'plan'                   => TenantPlan::Starter->value,
+            'subscription_status'    => TenantStatus::Active->value,
+            'subscription_ends_at'   => now()->addYear(),
+            'rbi_bank_rate'          => 6.75,
+            'is_active'              => true,
+            'onboarding_completed_at'=> now()->subDays(30),
+            'settings'               => [
                 'alerts' => [
-                    'email_enabled'   => true,
+                    'email_enabled'    => true,
                     'email_recipients' => ['accounts@arjuntextiles.com'],
                     'whatsapp_enabled' => false,
                     't10_enabled'      => true,
@@ -57,37 +111,57 @@ class DatabaseSeeder extends Seeder
             ],
         ]);
 
-        // Users
+        // ── Users — all four roles ─────────────────────────────────────────
         $owner = User::create([
-            'tenant_id'   => $tenant->id,
-            'name'        => 'Arjun Sharma',
-            'email'       => 'arjun@arjuntextiles.com',
-            'password'    => Hash::make('password'),
-            'role'        => UserRole::Owner->value,
-            'phone'       => '+919876543210',
-            'is_active'   => true,
+            'tenant_id' => $tenant->id,
+            'name'      => 'Arjun Sharma',
+            'email'     => 'arjun@arjuntextiles.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Owner->value,
+            'phone'     => '+919876543210',
+            'is_active' => true,
         ]);
 
         User::create([
-            'tenant_id'   => $tenant->id,
-            'name'        => 'Priya Mehta',
-            'email'       => 'priya@arjuntextiles.com',
-            'password'    => Hash::make('password'),
-            'role'        => UserRole::Finance->value,
-            'phone'       => '+919876543211',
-            'is_active'   => true,
+            'tenant_id' => $tenant->id,
+            'name'      => 'Vikram Nair',
+            'email'     => 'admin@arjuntextiles.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Admin->value,
+            'phone'     => '+919876543212',
+            'is_active' => true,
         ]);
 
-        // Vendors
+        User::create([
+            'tenant_id' => $tenant->id,
+            'name'      => 'Priya Mehta',
+            'email'     => 'priya@arjuntextiles.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Finance->value,
+            'phone'     => '+919876543211',
+            'is_active' => true,
+        ]);
+
+        User::create([
+            'tenant_id' => $tenant->id,
+            'name'      => 'Deepa Krishnan',
+            'email'     => 'viewer@arjuntextiles.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Viewer->value,
+            'phone'     => '+919876543213',
+            'is_active' => true,
+        ]);
+
+        // ── Vendors ────────────────────────────────────────────────────────
         $vendorData = [
-            ['name' => 'Suresh Yarns Pvt Ltd',         'category' => VendorCategory::Micro,          'gstin' => '29ABCDE1234F1Z5', 'udyam' => 'UDYAM-KA-01-0001234'],
-            ['name' => 'Global Thread Works',           'category' => VendorCategory::Micro,          'gstin' => null,              'udyam' => 'UDYAM-TN-05-0007890'],
-            ['name' => 'Kamath Fabrics',                'category' => VendorCategory::Micro,          'gstin' => '33FGHIJ5678K2Y6', 'udyam' => null],
-            ['name' => 'Maharashtra Dye Chemicals',     'category' => VendorCategory::Small,          'gstin' => '27KLMNO9012L3A7', 'udyam' => 'UDYAM-MH-12-0003456'],
-            ['name' => 'Punjab Spinning Mills Ltd',     'category' => VendorCategory::Small,          'gstin' => '03PQRST3456M4B8', 'udyam' => null],
-            ['name' => 'Reliance Industries Ltd',       'category' => VendorCategory::Large,          'gstin' => '27AAACR0541Q1ZI', 'udyam' => null],
-            ['name' => 'Bharat Packaging Ltd',          'category' => VendorCategory::Medium,         'gstin' => null,              'udyam' => null],
-            ['name' => 'Sunrise Accessories',           'category' => VendorCategory::Unclassified,   'gstin' => null,              'udyam' => null],
+            ['name' => 'Suresh Yarns Pvt Ltd',       'category' => VendorCategory::Micro,         'gstin' => '29ABCDE1234F1Z5', 'udyam' => 'UDYAM-KA-01-0001234'],
+            ['name' => 'Global Thread Works',          'category' => VendorCategory::Micro,         'gstin' => null,              'udyam' => 'UDYAM-TN-05-0007890'],
+            ['name' => 'Kamath Fabrics',               'category' => VendorCategory::Micro,         'gstin' => '33FGHIJ5678K2Y6', 'udyam' => null],
+            ['name' => 'Maharashtra Dye Chemicals',    'category' => VendorCategory::Small,         'gstin' => '27KLMNO9012L3A7', 'udyam' => 'UDYAM-MH-12-0003456'],
+            ['name' => 'Punjab Spinning Mills Ltd',    'category' => VendorCategory::Small,         'gstin' => '03PQRST3456M4B8', 'udyam' => null],
+            ['name' => 'Reliance Industries Ltd',      'category' => VendorCategory::Large,         'gstin' => '27AAACR0541Q1ZI', 'udyam' => null],
+            ['name' => 'Bharat Packaging Ltd',         'category' => VendorCategory::Medium,        'gstin' => null,              'udyam' => null],
+            ['name' => 'Sunrise Accessories',          'category' => VendorCategory::Unclassified,  'gstin' => null,              'udyam' => null],
         ];
 
         $vendors = [];
@@ -105,7 +179,6 @@ class DatabaseSeeder extends Seeder
 
         [$micro1, $micro2, $micro3, $small1, $small2, $large1, $medium1, $unclassified1] = $vendors;
 
-        // Import batch
         $batch = ImportBatch::create([
             'tenant_id'         => $tenant->id,
             'source'            => 'csv',
@@ -120,84 +193,78 @@ class DatabaseSeeder extends Seeder
             'created_by'        => $owner->id,
         ]);
 
-        // ── Invoices ─────────────────────────────────────────────────────────
-
-        $now = Carbon::now();
-
-        // Pending invoices (deadline in future — safe zone)
+        // ── Invoices — pending (safe zone) ────────────────────────────────
         $this->invoice($tenant, $micro1, $batch, [
-            'invoice_number'   => 'INV-2026-0101',
-            'invoice_date'     => '2026-06-15',
-            'amount'           => 150000,
+            'invoice_number'     => 'INV-2026-0101',
+            'invoice_date'       => '2026-06-15',
+            'amount'             => 150000,
             'effective_deadline' => '2026-06-30',
-            'status'           => InvoiceStatus::Pending->value,
+            'status'             => InvoiceStatus::Pending->value,
         ]);
 
         $this->invoice($tenant, $micro2, $batch, [
-            'invoice_number'   => 'INV-2026-0102',
-            'invoice_date'     => '2026-06-10',
-            'amount'           => 280000,
+            'invoice_number'     => 'INV-2026-0102',
+            'invoice_date'       => '2026-06-10',
+            'amount'             => 280000,
             'effective_deadline' => '2026-06-25',
-            'status'           => InvoiceStatus::Pending->value,
+            'status'             => InvoiceStatus::Pending->value,
         ]);
 
         $this->invoice($tenant, $small1, $batch, [
-            'invoice_number'   => 'INV-2026-0103',
-            'invoice_date'     => '2026-06-12',
-            'amount'           => 475000,
-            'effective_deadline' => '2026-06-27',
-            'status'           => InvoiceStatus::Pending->value,
-            'vendor_category_snapshot' => VendorCategory::Small->value,
+            'invoice_number'            => 'INV-2026-0103',
+            'invoice_date'              => '2026-06-12',
+            'amount'                    => 475000,
+            'effective_deadline'        => '2026-06-27',
+            'status'                    => InvoiceStatus::Pending->value,
+            'vendor_category_snapshot'  => VendorCategory::Small->value,
         ]);
 
         $this->invoice($tenant, $micro3, $batch, [
-            'invoice_number'   => 'INV-2026-0104',
-            'invoice_date'     => '2026-06-18',
-            'amount'           => 95000,
+            'invoice_number'     => 'INV-2026-0104',
+            'invoice_date'       => '2026-06-18',
+            'amount'             => 95000,
             'effective_deadline' => '2026-07-03',
-            'status'           => InvoiceStatus::Pending->value,
+            'status'             => InvoiceStatus::Pending->value,
         ]);
 
         // Pending with agreement (45-day deadline)
         $this->invoice($tenant, $small2, $batch, [
-            'invoice_number'    => 'INV-2026-0105',
-            'invoice_date'      => '2026-05-20',
-            'amount'            => 350000,
-            'agreement_exists'  => true,
-            'effective_deadline' => '2026-07-04',
-            'status'            => InvoiceStatus::Pending->value,
+            'invoice_number'           => 'INV-2026-0105',
+            'invoice_date'             => '2026-05-20',
+            'amount'                   => 350000,
+            'agreement_exists'         => true,
+            'effective_deadline'       => '2026-07-04',
+            'status'                   => InvoiceStatus::Pending->value,
             'vendor_category_snapshot' => VendorCategory::Small->value,
         ]);
 
-        // T10 warning zone (deadline in 8-10 days from 2026-06-19)
+        // T10 warning zone (deadline ~9 days away)
         $this->invoice($tenant, $micro1, $batch, [
-            'invoice_number'   => 'INV-2026-0106',
-            'invoice_date'     => '2026-06-13',
-            'amount'           => 220000,
-            'effective_deadline' => '2026-06-28', // 9 days away
-            'status'           => InvoiceStatus::Pending->value,
+            'invoice_number'     => 'INV-2026-0106',
+            'invoice_date'       => '2026-06-13',
+            'amount'             => 220000,
+            'effective_deadline' => '2026-06-28',
+            'status'             => InvoiceStatus::Pending->value,
         ]);
 
-        // T3 urgent zone (deadline in 1-3 days)
+        // T3 urgent zone (deadline in 2 days)
         $this->invoice($tenant, $micro2, $batch, [
-            'invoice_number'   => 'INV-2026-0107',
-            'invoice_date'     => '2026-06-06',
-            'amount'           => 180000,
-            'effective_deadline' => '2026-06-21', // 2 days away
-            'status'           => InvoiceStatus::Pending->value,
+            'invoice_number'     => 'INV-2026-0107',
+            'invoice_date'       => '2026-06-06',
+            'amount'             => 180000,
+            'effective_deadline' => '2026-06-21',
+            'status'             => InvoiceStatus::Pending->value,
         ]);
 
-        // Partial payments
+        // ── Partial payments ──────────────────────────────────────────────
         $partialInvoice1 = $this->invoice($tenant, $micro1, $batch, [
-            'invoice_number'   => 'INV-2026-0108',
-            'invoice_date'     => '2026-05-20',
-            'amount'           => 320000,
-            'paid_amount'      => 100000,
-            'balance'          => 220000,
+            'invoice_number'     => 'INV-2026-0108',
+            'invoice_date'       => '2026-05-20',
+            'amount'             => 320000,
+            'paid_amount'        => 100000,
             'effective_deadline' => '2026-06-04',
-            'status'           => InvoiceStatus::Partial->value,
+            'status'             => InvoiceStatus::Partial->value,
         ]);
-
         $this->payment($tenant, $partialInvoice1, [
             'payment_date'     => '2026-05-28',
             'amount'           => 100000,
@@ -206,16 +273,14 @@ class DatabaseSeeder extends Seeder
         ], $owner->id);
 
         $partialInvoice2 = $this->invoice($tenant, $small1, $batch, [
-            'invoice_number'   => 'INV-2026-0109',
-            'invoice_date'     => '2026-05-15',
-            'amount'           => 580000,
-            'paid_amount'      => 200000,
-            'balance'          => 380000,
-            'effective_deadline' => '2026-05-30',
-            'status'           => InvoiceStatus::Partial->value,
+            'invoice_number'           => 'INV-2026-0109',
+            'invoice_date'             => '2026-05-15',
+            'amount'                   => 580000,
+            'paid_amount'              => 200000,
+            'effective_deadline'       => '2026-05-30',
+            'status'                   => InvoiceStatus::Partial->value,
             'vendor_category_snapshot' => VendorCategory::Small->value,
         ]);
-
         $this->payment($tenant, $partialInvoice2, [
             'payment_date'     => '2026-05-22',
             'amount'           => 200000,
@@ -223,159 +288,159 @@ class DatabaseSeeder extends Seeder
             'reference_number' => 'TXN-RTGS-2405202',
         ], $owner->id);
 
-        // Fully paid invoices
-        $paidInvoice1 = $this->invoice($tenant, $micro2, $batch, [
-            'invoice_number'   => 'INV-2026-0201',
-            'invoice_date'     => '2026-04-05',
-            'amount'           => 240000,
-            'paid_amount'      => 240000,
-            'balance'          => 0,
+        // ── Fully paid ────────────────────────────────────────────────────
+        $paid1 = $this->invoice($tenant, $micro2, $batch, [
+            'invoice_number'     => 'INV-2026-0201',
+            'invoice_date'       => '2026-04-05',
+            'amount'             => 240000,
+            'paid_amount'        => 240000,
             'effective_deadline' => '2026-04-20',
-            'status'           => InvoiceStatus::Paid->value,
+            'status'             => InvoiceStatus::Paid->value,
         ]);
-
-        $this->payment($tenant, $paidInvoice1, [
+        $this->payment($tenant, $paid1, [
             'payment_date'     => '2026-04-18',
             'amount'           => 240000,
             'payment_mode'     => PaymentMode::Neft->value,
             'reference_number' => 'TXN-NEFT-2404001',
         ], $owner->id);
 
-        $paidInvoice2 = $this->invoice($tenant, $micro1, $batch, [
-            'invoice_number'   => 'INV-2026-0202',
-            'invoice_date'     => '2026-04-10',
-            'amount'           => 175000,
-            'paid_amount'      => 175000,
-            'balance'          => 0,
+        $paid2 = $this->invoice($tenant, $micro1, $batch, [
+            'invoice_number'     => 'INV-2026-0202',
+            'invoice_date'       => '2026-04-10',
+            'amount'             => 175000,
+            'paid_amount'        => 175000,
             'effective_deadline' => '2026-04-25',
-            'status'           => InvoiceStatus::Paid->value,
+            'status'             => InvoiceStatus::Paid->value,
         ]);
-
-        $this->payment($tenant, $paidInvoice2, [
+        $this->payment($tenant, $paid2, [
             'payment_date'     => '2026-04-22',
             'amount'           => 175000,
             'payment_mode'     => PaymentMode::Upi->value,
             'reference_number' => 'UPI-2404002',
         ], $owner->id);
 
-        $paidInvoice3 = $this->invoice($tenant, $small2, $batch, [
-            'invoice_number'   => 'INV-2026-0203',
-            'invoice_date'     => '2026-04-02',
-            'amount'           => 490000,
-            'paid_amount'      => 490000,
-            'balance'          => 0,
-            'effective_deadline' => '2026-05-17', // 45-day agreement
-            'agreement_exists'  => true,
-            'status'           => InvoiceStatus::Paid->value,
+        $paid3 = $this->invoice($tenant, $small2, $batch, [
+            'invoice_number'           => 'INV-2026-0203',
+            'invoice_date'             => '2026-04-02',
+            'amount'                   => 490000,
+            'paid_amount'              => 490000,
+            'agreement_exists'         => true,
+            'effective_deadline'       => '2026-05-17',
+            'status'                   => InvoiceStatus::Paid->value,
             'vendor_category_snapshot' => VendorCategory::Small->value,
         ]);
-
-        $this->payment($tenant, $paidInvoice3, [
+        $this->payment($tenant, $paid3, [
             'payment_date'     => '2026-05-10',
             'amount'           => 490000,
             'payment_mode'     => PaymentMode::Rtgs->value,
             'reference_number' => 'TXN-RTGS-2405003',
         ], $owner->id);
 
-        // Overdue invoices (deadline passed, still unpaid)
+        // ── Overdue ────────────────────────────────────────────────────────
         $this->invoice($tenant, $micro1, $batch, [
-            'invoice_number'   => 'INV-2026-0301',
-            'invoice_date'     => '2026-04-01',
-            'amount'           => 415000,
-            'effective_deadline' => '2026-04-16',
-            'status'           => InvoiceStatus::Overdue->value,
+            'invoice_number'      => 'INV-2026-0301',
+            'invoice_date'        => '2026-04-01',
+            'amount'              => 415000,
+            'effective_deadline'  => '2026-04-16',
+            'status'              => InvoiceStatus::Overdue->value,
             'disallowance_amount' => 415000,
-            'interest_amount'  => 18675,
+            'interest_amount'     => 18675,
         ]);
 
         $this->invoice($tenant, $micro2, $batch, [
-            'invoice_number'   => 'INV-2026-0302',
-            'invoice_date'     => '2026-04-05',
-            'amount'           => 290000,
-            'effective_deadline' => '2026-04-20',
-            'status'           => InvoiceStatus::Overdue->value,
+            'invoice_number'      => 'INV-2026-0302',
+            'invoice_date'        => '2026-04-05',
+            'amount'              => 290000,
+            'effective_deadline'  => '2026-04-20',
+            'status'              => InvoiceStatus::Overdue->value,
             'disallowance_amount' => 290000,
-            'interest_amount'  => 13050,
+            'interest_amount'     => 13050,
         ]);
 
         $this->invoice($tenant, $small1, $batch, [
-            'invoice_number'   => 'INV-2026-0303',
-            'invoice_date'     => '2026-05-01',
-            'amount'           => 650000,
-            'effective_deadline' => '2026-05-16',
-            'status'           => InvoiceStatus::Overdue->value,
-            'disallowance_amount' => 650000,
-            'interest_amount'  => 29250,
+            'invoice_number'           => 'INV-2026-0303',
+            'invoice_date'             => '2026-05-01',
+            'amount'                   => 650000,
+            'effective_deadline'       => '2026-05-16',
+            'status'                   => InvoiceStatus::Overdue->value,
+            'disallowance_amount'      => 650000,
+            'interest_amount'          => 29250,
             'vendor_category_snapshot' => VendorCategory::Small->value,
         ]);
 
-        // Large vendor — not subject to 43Bh — no disallowance
+        // Large & Medium — not subject to 43Bh
         $this->invoice($tenant, $large1, $batch, [
-            'invoice_number'   => 'INV-2026-0401',
-            'invoice_date'     => '2026-04-10',
-            'amount'           => 1200000,
-            'effective_deadline' => '2026-04-25',
-            'status'           => InvoiceStatus::Pending->value,
+            'invoice_number'           => 'INV-2026-0401',
+            'invoice_date'             => '2026-04-10',
+            'amount'                   => 1200000,
+            'effective_deadline'       => '2026-04-25',
+            'status'                   => InvoiceStatus::Pending->value,
             'vendor_category_snapshot' => VendorCategory::Large->value,
-            'disallowance_amount' => 0,
-            'interest_amount'  => 0,
+            'disallowance_amount'      => 0,
+            'interest_amount'          => 0,
         ]);
 
-        // Medium vendor — also not subject to 43Bh
         $this->invoice($tenant, $medium1, $batch, [
-            'invoice_number'   => 'INV-2026-0402',
-            'invoice_date'     => '2026-05-05',
-            'amount'           => 750000,
-            'effective_deadline' => '2026-05-20',
-            'status'           => InvoiceStatus::Pending->value,
+            'invoice_number'           => 'INV-2026-0402',
+            'invoice_date'             => '2026-05-05',
+            'amount'                   => 750000,
+            'effective_deadline'       => '2026-05-20',
+            'status'                   => InvoiceStatus::Pending->value,
             'vendor_category_snapshot' => VendorCategory::Medium->value,
-            'disallowance_amount' => 0,
-            'interest_amount'  => 0,
+            'disallowance_amount'      => 0,
+            'interest_amount'          => 0,
         ]);
 
-        // Disallowed from FY 2025-26
+        // Prior FY disallowed
         $this->invoice($tenant, $micro3, $batch, [
-            'invoice_number'     => 'INV-2025-0901',
-            'invoice_date'       => '2025-12-15',
-            'amount'             => 380000,
-            'effective_deadline' => '2025-12-30',
-            'financial_year'     => '2025-26',
-            'status'             => InvoiceStatus::Disallowed->value,
+            'invoice_number'      => 'INV-2025-0901',
+            'invoice_date'        => '2025-12-15',
+            'amount'              => 380000,
+            'effective_deadline'  => '2025-12-30',
+            'financial_year'      => '2025-26',
+            'status'              => InvoiceStatus::Disallowed->value,
             'disallowance_amount' => 380000,
-            'interest_amount'    => 57000,
+            'interest_amount'     => 57000,
         ]);
 
         $this->invoice($tenant, $small1, $batch, [
-            'invoice_number'     => 'INV-2025-0902',
-            'invoice_date'       => '2026-02-20',
-            'amount'             => 520000,
-            'effective_deadline' => '2026-03-07',
-            'financial_year'     => '2025-26',
-            'status'             => InvoiceStatus::Disallowed->value,
-            'disallowance_amount' => 520000,
-            'interest_amount'    => 23400,
+            'invoice_number'           => 'INV-2025-0902',
+            'invoice_date'             => '2026-02-20',
+            'amount'                   => 520000,
+            'effective_deadline'       => '2026-03-07',
+            'financial_year'           => '2025-26',
+            'status'                   => InvoiceStatus::Disallowed->value,
+            'disallowance_amount'      => 520000,
+            'interest_amount'          => 23400,
             'vendor_category_snapshot' => VendorCategory::Small->value,
         ]);
+
+        $this->command->info('  [TENANT 1]  Arjun Textiles (Starter, Active)');
+        $this->command->line('             arjun@arjuntextiles.com / password  (Owner)');
+        $this->command->line('             admin@arjuntextiles.com / password  (Admin)');
+        $this->command->line('             priya@arjuntextiles.com / password  (Finance)');
+        $this->command->line('             viewer@arjuntextiles.com / password (Viewer)');
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Tenant 2 — Rajesh & Associates (Growth plan, Trial — 10 days left)
+    // Tenant 2 — Rajesh & Associates
+    // Plan: Growth | Status: Trial (10 days left) | Owner + Finance
     // ─────────────────────────────────────────────────────────────────────────
     private function seedRajeshAssociates(): void
     {
         $tenant = Tenant::create([
-            'name'                 => 'Rajesh & Associates',
-            'email'                => 'rajesh@rajeshca.com',
-            'phone'                => '+917788990011',
-            'gstin'                => null,
-            'state'                => 'Maharashtra',
-            'city'                 => 'Pune',
-            'plan'                 => TenantPlan::Growth->value,
-            'subscription_status'  => TenantStatus::Trial->value,
-            'trial_ends_at'        => now()->addDays(10),
-            'rbi_bank_rate'        => 6.75,
-            'is_active'            => true,
-            'settings'             => [
+            'name'                   => 'Rajesh & Associates',
+            'email'                  => 'rajesh@rajeshca.com',
+            'phone'                  => '+917788990011',
+            'state'                  => 'Maharashtra',
+            'city'                   => 'Pune',
+            'plan'                   => TenantPlan::Growth->value,
+            'subscription_status'    => TenantStatus::Trial->value,
+            'trial_ends_at'          => now()->addDays(10),
+            'rbi_bank_rate'          => 6.75,
+            'is_active'              => true,
+            'onboarding_completed_at'=> now()->subDays(5),
+            'settings'               => [
                 'alerts' => [
                     'email_enabled'    => true,
                     'email_recipients' => ['rajesh@rajeshca.com'],
@@ -388,23 +453,32 @@ class DatabaseSeeder extends Seeder
         ]);
 
         $owner = User::create([
-            'tenant_id'   => $tenant->id,
-            'name'        => 'Rajesh Kumar',
-            'email'       => 'rajesh@rajeshca.com',
-            'password'    => Hash::make('password'),
-            'role'        => UserRole::Owner->value,
-            'phone'       => '+919898989898',
-            'is_active'   => true,
+            'tenant_id' => $tenant->id,
+            'name'      => 'Rajesh Kumar',
+            'email'     => 'rajesh@rajeshca.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Owner->value,
+            'phone'     => '+919898989898',
+            'is_active' => true,
         ]);
 
-        // Vendors
+        User::create([
+            'tenant_id' => $tenant->id,
+            'name'      => 'Anita Joshi',
+            'email'     => 'accounts@rajeshca.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Finance->value,
+            'phone'     => '+919898989899',
+            'is_active' => true,
+        ]);
+
         $vendorData = [
-            ['name' => 'Pune Steel Works',         'category' => VendorCategory::Micro],
-            ['name' => 'Nashik Agro Products',     'category' => VendorCategory::Micro],
-            ['name' => 'Solapur Textiles',         'category' => VendorCategory::Small],
-            ['name' => 'Nagpur Auto Parts',        'category' => VendorCategory::Small],
-            ['name' => 'Unregistered Supplier A',  'category' => VendorCategory::Unclassified],
-            ['name' => 'Unregistered Supplier B',  'category' => VendorCategory::Unclassified],
+            ['name' => 'Pune Steel Works',        'category' => VendorCategory::Micro],
+            ['name' => 'Nashik Agro Products',    'category' => VendorCategory::Micro],
+            ['name' => 'Solapur Textiles',        'category' => VendorCategory::Small],
+            ['name' => 'Nagpur Auto Parts',       'category' => VendorCategory::Small],
+            ['name' => 'Unregistered Supplier A', 'category' => VendorCategory::Unclassified],
+            ['name' => 'Unregistered Supplier B', 'category' => VendorCategory::Unclassified],
         ];
 
         $vendors = [];
@@ -434,43 +508,39 @@ class DatabaseSeeder extends Seeder
             'created_by'        => $owner->id,
         ]);
 
-        // Pending
         $this->invoice($tenant, $micro1, $batch, [
-            'invoice_number'   => 'PU-2026-001',
-            'invoice_date'     => '2026-06-14',
-            'amount'           => 125000,
+            'invoice_number'     => 'PU-2026-001',
+            'invoice_date'       => '2026-06-14',
+            'amount'             => 125000,
             'effective_deadline' => '2026-06-29',
-            'status'           => InvoiceStatus::Pending->value,
+            'status'             => InvoiceStatus::Pending->value,
         ]);
 
         $this->invoice($tenant, $small1, $batch, [
-            'invoice_number'   => 'PU-2026-002',
-            'invoice_date'     => '2026-06-10',
-            'amount'           => 340000,
-            'effective_deadline' => '2026-06-25',
-            'status'           => InvoiceStatus::Pending->value,
+            'invoice_number'           => 'PU-2026-002',
+            'invoice_date'             => '2026-06-10',
+            'amount'                   => 340000,
+            'effective_deadline'       => '2026-06-25',
+            'status'                   => InvoiceStatus::Pending->value,
             'vendor_category_snapshot' => VendorCategory::Small->value,
         ]);
 
         $this->invoice($tenant, $micro2, $batch, [
-            'invoice_number'   => 'PU-2026-003',
-            'invoice_date'     => '2026-06-17',
-            'amount'           => 78000,
+            'invoice_number'     => 'PU-2026-003',
+            'invoice_date'       => '2026-06-17',
+            'amount'             => 78000,
             'effective_deadline' => '2026-07-02',
-            'status'           => InvoiceStatus::Pending->value,
+            'status'             => InvoiceStatus::Pending->value,
         ]);
 
-        // Partial
         $partial = $this->invoice($tenant, $micro1, $batch, [
-            'invoice_number'   => 'PU-2026-004',
-            'invoice_date'     => '2026-05-25',
-            'amount'           => 210000,
-            'paid_amount'      => 70000,
-            'balance'          => 140000,
+            'invoice_number'     => 'PU-2026-004',
+            'invoice_date'       => '2026-05-25',
+            'amount'             => 210000,
+            'paid_amount'        => 70000,
             'effective_deadline' => '2026-06-09',
-            'status'           => InvoiceStatus::Partial->value,
+            'status'             => InvoiceStatus::Partial->value,
         ]);
-
         $this->payment($tenant, $partial, [
             'payment_date'     => '2026-06-02',
             'amount'           => 70000,
@@ -478,18 +548,15 @@ class DatabaseSeeder extends Seeder
             'reference_number' => 'UPI-PUNE-001',
         ], $owner->id);
 
-        // Paid
         $paid = $this->invoice($tenant, $small2, $batch, [
-            'invoice_number'   => 'PU-2026-005',
-            'invoice_date'     => '2026-04-08',
-            'amount'           => 295000,
-            'paid_amount'      => 295000,
-            'balance'          => 0,
-            'effective_deadline' => '2026-04-23',
-            'status'           => InvoiceStatus::Paid->value,
+            'invoice_number'           => 'PU-2026-005',
+            'invoice_date'             => '2026-04-08',
+            'amount'                   => 295000,
+            'paid_amount'              => 295000,
+            'effective_deadline'       => '2026-04-23',
+            'status'                   => InvoiceStatus::Paid->value,
             'vendor_category_snapshot' => VendorCategory::Small->value,
         ]);
-
         $this->payment($tenant, $paid, [
             'payment_date'     => '2026-04-20',
             'amount'           => 295000,
@@ -497,39 +564,171 @@ class DatabaseSeeder extends Seeder
             'reference_number' => 'NEFT-PUNE-001',
         ], $owner->id);
 
-        // Overdue
         $this->invoice($tenant, $micro1, $batch, [
-            'invoice_number'   => 'PU-2026-006',
-            'invoice_date'     => '2026-04-03',
-            'amount'           => 155000,
-            'effective_deadline' => '2026-04-18',
-            'status'           => InvoiceStatus::Overdue->value,
+            'invoice_number'      => 'PU-2026-006',
+            'invoice_date'        => '2026-04-03',
+            'amount'              => 155000,
+            'effective_deadline'  => '2026-04-18',
+            'status'              => InvoiceStatus::Overdue->value,
             'disallowance_amount' => 155000,
-            'interest_amount'  => 6975,
+            'interest_amount'     => 6975,
         ]);
 
         $this->invoice($tenant, $small1, $batch, [
-            'invoice_number'   => 'PU-2026-007',
-            'invoice_date'     => '2026-04-12',
-            'amount'           => 430000,
-            'effective_deadline' => '2026-04-27',
-            'status'           => InvoiceStatus::Overdue->value,
-            'disallowance_amount' => 430000,
-            'interest_amount'  => 19350,
+            'invoice_number'           => 'PU-2026-007',
+            'invoice_date'             => '2026-04-12',
+            'amount'                   => 430000,
+            'effective_deadline'       => '2026-04-27',
+            'status'                   => InvoiceStatus::Overdue->value,
+            'disallowance_amount'      => 430000,
+            'interest_amount'          => 19350,
             'vendor_category_snapshot' => VendorCategory::Small->value,
         ]);
 
-        // Disallowed from FY 2025-26
         $this->invoice($tenant, $micro2, $batch, [
-            'invoice_number'     => 'PU-2025-099',
-            'invoice_date'       => '2026-01-10',
-            'amount'             => 195000,
-            'effective_deadline' => '2026-01-25',
-            'financial_year'     => '2025-26',
-            'status'             => InvoiceStatus::Disallowed->value,
+            'invoice_number'      => 'PU-2025-099',
+            'invoice_date'        => '2026-01-10',
+            'amount'              => 195000,
+            'effective_deadline'  => '2026-01-25',
+            'financial_year'      => '2025-26',
+            'status'              => InvoiceStatus::Disallowed->value,
             'disallowance_amount' => 195000,
-            'interest_amount'    => 29250,
+            'interest_amount'     => 29250,
         ]);
+
+        $this->command->info('  [TENANT 2]  Rajesh & Associates (Growth, Trial — 10 days)');
+        $this->command->line('             rajesh@rajeshca.com / password   (Owner)');
+        $this->command->line('             accounts@rajeshca.com / password (Finance)');
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Tenant 3 — Sharma Enterprises
+    // Plan: Starter | Status: Suspended — tests the 402 / access-blocked UI
+    // ─────────────────────────────────────────────────────────────────────────
+    private function seedSharmaEnterprises(): void
+    {
+        $tenant = Tenant::create([
+            'name'                   => 'Sharma Enterprises',
+            'email'                  => 'sharma@sharmaent.com',
+            'state'                  => 'Delhi',
+            'city'                   => 'New Delhi',
+            'plan'                   => TenantPlan::Starter->value,
+            'subscription_status'    => TenantStatus::Suspended->value,
+            'rbi_bank_rate'          => 6.75,
+            'is_active'              => true,
+            'onboarding_completed_at'=> now()->subMonths(2),
+        ]);
+
+        User::create([
+            'tenant_id' => $tenant->id,
+            'name'      => 'Mohit Sharma',
+            'email'     => 'sharma@sharmaent.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Owner->value,
+            'is_active' => true,
+        ]);
+
+        $this->command->info('  [TENANT 3]  Sharma Enterprises (Starter, SUSPENDED)');
+        $this->command->line('             sharma@sharmaent.com / password  (Owner)');
+        $this->command->line('             → Login succeeds but /dashboard returns 402 Suspended');
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Tenant 4 — Global CA Partners
+    // Plan: CaFirm | Status: Active | All 4 roles, no invoice data
+    // Tests: multi-user CA firm scenario, plan limits (unlimited vendors/users)
+    // ─────────────────────────────────────────────────────────────────────────
+    private function seedGlobalCaPartners(): void
+    {
+        $tenant = Tenant::create([
+            'name'                   => 'Global CA Partners LLP',
+            'email'                  => 'admin@globalca.com',
+            'phone'                  => '+912233445566',
+            'gstin'                  => '27AABCG1234H1Z9',
+            'state'                  => 'Maharashtra',
+            'city'                   => 'Mumbai',
+            'plan'                   => TenantPlan::CaFirm->value,
+            'subscription_status'    => TenantStatus::Active->value,
+            'subscription_ends_at'   => now()->addYear(),
+            'rbi_bank_rate'          => 6.75,
+            'is_active'              => true,
+            'onboarding_completed_at'=> now()->subDays(10),
+            'settings'               => [
+                'alerts' => [
+                    'email_enabled'    => true,
+                    'email_recipients' => ['admin@globalca.com'],
+                    'whatsapp_enabled' => false,
+                    't10_enabled'      => true,
+                    't3_enabled'       => true,
+                    'overdue_enabled'  => true,
+                ],
+            ],
+        ]);
+
+        $owner = User::create([
+            'tenant_id' => $tenant->id,
+            'name'      => 'Sanjay Gupta',
+            'email'     => 'admin@globalca.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Owner->value,
+            'phone'     => '+912233445566',
+            'is_active' => true,
+        ]);
+
+        User::create([
+            'tenant_id' => $tenant->id,
+            'name'      => 'Kavitha Reddy',
+            'email'     => 'manager@globalca.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Admin->value,
+            'phone'     => '+912233445567',
+            'is_active' => true,
+        ]);
+
+        User::create([
+            'tenant_id' => $tenant->id,
+            'name'      => 'Ravi Patel',
+            'email'     => 'finance@globalca.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Finance->value,
+            'phone'     => '+912233445568',
+            'is_active' => true,
+        ]);
+
+        User::create([
+            'tenant_id' => $tenant->id,
+            'name'      => 'Meena Iyer',
+            'email'     => 'viewer@globalca.com',
+            'password'  => Hash::make('password'),
+            'role'      => UserRole::Viewer->value,
+            'phone'     => '+912233445569',
+            'is_active' => true,
+        ]);
+
+        // A few vendors to populate the vendors list
+        $vendorNames = [
+            ['name' => 'Chennai Garments Co',         'category' => VendorCategory::Micro],
+            ['name' => 'Hyderabad Pharma Supplies',   'category' => VendorCategory::Small],
+            ['name' => 'Ahmedabad Print House',       'category' => VendorCategory::Micro],
+            ['name' => 'Kolkata Paper Mills',         'category' => VendorCategory::Small],
+            ['name' => 'Delhi Auto Spares',           'category' => VendorCategory::Unclassified],
+        ];
+
+        foreach ($vendorNames as $vd) {
+            Vendor::create([
+                'tenant_id'  => $tenant->id,
+                'name'       => $vd['name'],
+                'category'   => $vd['category']->value,
+                'is_active'  => true,
+                'created_by' => $owner->id,
+            ]);
+        }
+
+        $this->command->info('  [TENANT 4]  Global CA Partners LLP (CA Firm, Active)');
+        $this->command->line('             admin@globalca.com / password   (Owner)');
+        $this->command->line('             manager@globalca.com / password (Admin)');
+        $this->command->line('             finance@globalca.com / password (Finance)');
+        $this->command->line('             viewer@globalca.com / password  (Viewer)');
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -546,7 +745,6 @@ class DatabaseSeeder extends Seeder
             'currency'                 => 'INR',
             'agreement_exists'         => false,
             'paid_amount'              => 0.00,
-            'balance'                  => $amount,
             'vendor_category_snapshot' => VendorCategory::Micro->value,
             'financial_year'           => '2026-27',
             'disallowance_amount'      => 0.00,

@@ -92,7 +92,7 @@ class EnsureActiveTenantTest extends TestCase
     }
 
     #[Test]
-    public function super_admin_without_tenant_passes_through(): void
+    public function super_admin_without_tenant_is_redirected_to_admin_panel(): void
     {
         $superAdmin = User::factory()->create([
             'tenant_id' => null,
@@ -100,7 +100,9 @@ class EnsureActiveTenantTest extends TestCase
             'password'  => bcrypt('admin123'),
         ]);
 
-        $this->actingAs($superAdmin)->get('/dashboard')->assertStatus(200);
+        // Super-admins have no tenant; EnsureTenantUser redirects them to /admin
+        // rather than crashing on $user->tenant->id inside the controller.
+        $this->actingAs($superAdmin)->get('/dashboard')->assertRedirect('/admin');
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
