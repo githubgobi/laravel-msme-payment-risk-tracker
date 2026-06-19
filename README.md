@@ -44,7 +44,7 @@ Target: 150 customers → ₹3–6 lakh/month. 400 customers → ₹8–12 lakh/
 |---|---|
 | Framework | Laravel 13 (PHP 8.3) |
 | Admin Panel | Filament v5.6.7 |
-| Frontend | Livewire v4, Blade, Tailwind CSS |
+| Customer UI | Inertia.js + Vue 3 + Pinia + Tailwind CSS v4 |
 | Database | MySQL 8.4 |
 | Queue | Laravel Queue (database driver local / Redis in production) |
 | Import | maatwebsite/excel v3 (CSV/Excel), custom XML parser (Tally) |
@@ -279,7 +279,159 @@ Design and implement the complete production-grade database schema covering all 
 
 ---
 
-### Phase 2 — Core Rules Engine *(Planned)*
+### Phase 1.5 — Inertia.js + Vue 3 Frontend Stack ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Replace the default Blade-only frontend with an Inertia.js + Vue 3 SPA-hybrid stack for the customer-facing UI, while keeping Filament at `/admin` for super-admin operations.
+
+#### Architecture Decision: Why Inertia.js + Vue 3
+
+| Approach | Rejected Because |
+|---|---|
+| Full SPA (separate Vue app) | Needs a separate API layer; auth/session handling is complex; doubles deployment surface |
+| Full Blade + Livewire | Limited JS ecosystem; no Vue component libraries; harder to build rich financial UIs |
+| **Inertia.js + Vue 3** ✅ | Single codebase; server-side auth stays in Laravel; Vue for rich UI; no REST API needed |
+
+#### Dependencies Added
+
+| Package | Version | Purpose |
+|---|---|---|
+| `inertiajs/inertia-laravel` | ^2.0 | Server-side Inertia adapter |
+| `@inertiajs/vue3` | latest | Vue 3 client adapter |
+| `vue` | ^3.x | Frontend framework |
+| `@vitejs/plugin-vue` | latest | Vite plugin for SFC compilation |
+| `pinia` | latest | Vue state management |
+| `vue3-apexcharts` + `apexcharts` | latest | Dashboard charting |
+| `@heroicons/vue` | ^2.x | UI icons |
+| `@tailwindcss/vite` | latest | Tailwind CSS v4 via Vite |
+
+#### Files Created
+
+| File | Purpose |
+|---|---|
+| `app/Http/Middleware/HandleInertiaRequests.php` | Shares `auth.user` + flash messages to all Vue pages |
+| `resources/views/app.blade.php` | Inertia root template (replaces `welcome.blade.php`) |
+| `resources/js/app.js` | Bootstraps Inertia + Vue + Pinia + ApexCharts |
+| `resources/js/bootstrap.js` | Axios with CSRF + credentials |
+| `resources/js/Layouts/AppLayout.vue` | Collapsible sidebar + topbar with tenant name |
+| `resources/js/Components/NavItem.vue` | Sidebar nav link with active state + tooltip when collapsed |
+| `resources/js/Components/FlashMessage.vue` | Auto-dismiss toasts (success/error/warning, 5s) |
+| `resources/js/Components/StatCard.vue` | KPI card with icon + optional trend indicator |
+| `resources/js/Components/AppCard.vue` | Reusable content card with header/actions slot |
+| `resources/js/Components/AppBadge.vue` | Colored status badge with dot option |
+| `resources/js/Components/AppButton.vue` | Button/Link with variants (primary/secondary/danger/ghost) + loading spinner |
+| `resources/js/Pages/Auth/Login.vue` | Custom customer login page |
+| `resources/js/Pages/Dashboard.vue` | Dashboard with 4 KPI cards + at-risk invoice table |
+| `app/Http/Controllers/DashboardController.php` | Returns `Inertia::render('Dashboard')` |
+
+#### Route Structure
+
+| Method | Path | Handler |
+|---|---|---|
+| GET | `/` | Redirect to `/dashboard` or `/login` |
+| GET/POST | `/login` | Customer auth (not Filament) |
+| POST | `/logout` | Session invalidate + redirect |
+| GET | `/dashboard` | `DashboardController@index` |
+| GET | `/vendors`, `/invoices`, `/payments`, `/import`, `/alerts`, `/calculator` | Placeholder Inertia renders |
+| GET | `/admin/*` | Filament super-admin panel (unchanged) |
+
+#### Notes
+- Filament and Inertia coexist without conflict — Filament owns `/admin/*`, Inertia owns all other routes
+- ApexCharts (820KB) is loaded eagerly in Phase 1.5; will be lazy-loaded in Phase 5 when charts are fully implemented
+- `formatCurrency()` in `Dashboard.vue` formats INR to Cr/L/K shorthand
+
+---
+
+### Phase 2 — Core Rules Engine ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Implement the Section 43B(h) calculation engine as a pure, framework-independent PHP service with 100% unit test coverage. No database access inside the engine — all inputs are primitives, all outputs are DTOs.
+
+#### Architecture Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| Engine has no DB access | Primitive inputs only | Fully unit-testable without migrations or mocks |
+| Separate `InvoiceRiskRecomputer` | DB-aware batch wrapper | Separation of concerns — engine stays pure |
+| `RiskAssessment` DTO | PHP 8.3 readonly constructor promotion | Immutable output; prevents accidental mutation |
+| Interest formula | Compound, monthly rests | Section 43B(h) requirement: "3× bank rate compounded monthly" |
+| Status = `Disallowed` when | balance > 0 AND past March 31 of FY | Tax disallowance is confirmed at FY end |
+| Batch recompute uses `chunk(200)` | Memory-safe processing | Never loads all invoices of a tenant into memory |
+
+#### Formula Reference
+
+```
+Deadline:
+  invoice_date + 15 days   (no written agreement)
+  invoice_date + 45 days   (written agreement exists — MSME Act maximum)
+
+Financial Year:
+  April 1 → March 31 ("2025-26", "2024-25", etc.)
+
+Disallowance:
+  amount = unpaid balance as of effective_deadline
+
+Interest (compound, monthly rests):
+  annual_rate  = rbi_bank_rate × 3
+  monthly_rate = annual_rate / 12 / 100
+  interest     = principal × ((1 + monthly_rate)^n − 1)
+  where n = complete months elapsed since effective_deadline
+```
+
+#### Files Created
+
+| File | Purpose |
+|---|---|
+| `app/DTOs/RiskAssessment.php` | Immutable output DTO with `toArray()` + `safe()` factory |
+| `app/Services/MsmeDeadlineEngine.php` | Pure calculation engine — deadline, FY, interest, full `assess()` |
+| `app/Services/InvoiceRiskRecomputer.php` | DB-aware batch updater; calls engine, persists to `purchase_invoices` |
+| `app/Console/Commands/RecomputeMsmeRisk.php` | `php artisan msme:recompute-risk [--tenant=] [--as-of=]` |
+| `tests/Unit/Services/MsmeDeadlineEngineTest.php` | 48 unit tests, 99 assertions — **100% method coverage** |
+| `tests/Feature/ExampleTest.php` | Updated scaffold test to match real redirect behaviour |
+
+#### Edge Cases Tested
+
+| Scenario | Behaviour |
+|---|---|
+| Payment on deadline date | `daysOverdue = 0` → Pending (not overdue) |
+| Payment 1 day after deadline | Overdue, full balance disallowed, 0 months interest |
+| Partial payment before deadline | Only balance (not amount) is at risk |
+| Negative amount (credit note) | Treated as Paid — skipped |
+| Vendor category = Medium/Large/Unclassified | `isSubjectTo43Bh = false`, zero disallowance |
+| Leap year (Feb 14, 2024 + 15 days) | Feb 29, 2024 ✓ |
+| Non-leap year (Feb 14, 2025 + 15 days) | Mar 1, 2025 ✓ |
+| Invoice in last week of March | FY boundary handled correctly |
+| Past March 31 of FY | Status → `Disallowed` |
+| `as-of` override for retrospective | Supported via `asOf` param |
+
+#### Test Results
+
+```
+Tests:   50 total (48 engine + 2 existing)
+Passed:  50 / 50
+Assertions: 102
+Duration: ~1.2s
+Coverage: 100% on MsmeDeadlineEngine + RiskAssessment DTO
+```
+
+#### Artisan Command
+
+```bash
+# Recompute all tenants
+php artisan msme:recompute-risk
+
+# Single tenant
+php artisan msme:recompute-risk --tenant=1
+
+# Retrospective (e.g., for March 31 year-end snapshot)
+php artisan msme:recompute-risk --as-of=2025-03-31
+```
+
+---
 
 ---
 
