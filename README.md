@@ -172,14 +172,107 @@ Bootstrap production-grade Laravel project with correct stack, configure MySQL a
 - Password: `admin123` *(change before any shared or staging environment)*
 
 #### Known Limitations / Deferred
-- No multi-tenancy scaffolding yet → Phase 1
-- No RBAC yet → Phase 1
+- No multi-tenancy scaffolding yet → Phase 1 ✅
+- No RBAC yet → Phase 1 ✅
 - Redis not configured for production queue → Phase 9
 - Ollama/Qwen LLM not yet integrated → Phase 4
 
 ---
 
-### Phase 1 — Database Architecture *(In Progress)*
+### Phase 1 — Database Architecture ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Design and implement the complete production-grade database schema covering all entities required for 43B(h) compliance tracking, multi-tenancy, audit trail, and alerting.
+
+#### Architecture Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| Multi-tenancy | Single DB, `tenant_id` global scope | Simpler ops at target scale; `TenantScope` Eloquent global scope enforces isolation automatically |
+| Monetary storage | `DECIMAL(15,2)` | Avoids float precision errors on large INR amounts |
+| `balance` column | MySQL stored computed column (`amount - paid_amount`) | Always consistent with payments; eliminates SUM() join on every dashboard row |
+| `vendor_category_snapshot` | Copied to invoice at creation | Vendor category can change later; historical invoices must use category at invoice time |
+| `financial_year` | Stored as `VARCHAR(7)` e.g. `"2025-26"` | Enables GROUP BY without date math; India FY = Apr 1 – Mar 31 |
+| `audit_log` | No soft deletes, no `updated_at`, append-only | Immutable by design — required for Form 3CD compliance |
+| Soft deletes | All main tables | Financial records must never be hard-deleted |
+
+#### Schema Overview
+
+| Table | Purpose | Key Indexes |
+|---|---|---|
+| `tenants` | Business/CA firm accounts, plan, subscription | `subscription_status`, `is_active` |
+| `users` | Auth users scoped to tenant, with role | `(tenant_id, is_active)`, `(tenant_id, role)` |
+| `vendors` | Supplier master with Udyam classification | `(tenant_id, category)`, `udyam_number`, `UNIQUE(tenant_id, gstin)` |
+| `import_batches` | CSV/Tally XML import job tracking | `(tenant_id, status)` |
+| `purchase_invoices` | Core entity — bill with deadline and risk computation | `(tenant_id, effective_deadline, status)`, `UNIQUE(tenant_id, invoice_number, vendor_id)` |
+| `payments` | Payments against invoices | `(tenant_id, invoice_id)`, `(tenant_id, payment_date)` |
+| `alert_log` | Email/WhatsApp dispatch history | `(tenant_id, alert_type, status)` |
+| `audit_log` | Immutable change trail for compliance | `(tenant_id, model_type, model_id)` |
+
+#### PHP Enums Created (13 total)
+
+| Enum | Values |
+|---|---|
+| `UserRole` | owner, admin, finance, viewer |
+| `TenantPlan` | starter, growth, ca_firm |
+| `TenantStatus` | trial, active, inactive, suspended |
+| `VendorCategory` | micro, small, medium, large, unclassified |
+| `VendorVerificationSource` | manual, api, llm |
+| `InvoiceStatus` | pending, partial, paid, overdue, disallowed |
+| `PaymentMode` | neft, rtgs, imps, upi, cheque, cash, other |
+| `ImportSource` | csv, tally_xml, manual |
+| `ImportStatus` | pending, processing, completed, failed |
+| `AlertChannel` | email, whatsapp, sms |
+| `AlertType` | t10_warning, t3_urgent, overdue, year_end_summary |
+| `AlertStatus` | pending, sent, delivered, failed |
+| `AuditEvent` | created, updated, deleted, restored |
+
+#### Models Created
+
+| Model | Traits | Key Relationships |
+|---|---|---|
+| `Tenant` | SoftDeletes | hasMany: users, vendors, purchaseInvoices, payments, importBatches, alertLog |
+| `User` | SoftDeletes | belongsTo: tenant |
+| `Vendor` | HasTenant, HasAuditColumns, SoftDeletes | hasMany: purchaseInvoices |
+| `ImportBatch` | HasTenant | hasMany: purchaseInvoices |
+| `PurchaseInvoice` | HasTenant, HasAuditColumns, SoftDeletes | belongsTo: vendor, importBatch; hasMany: payments, alertLog |
+| `Payment` | HasTenant, HasAuditColumns, SoftDeletes | belongsTo: invoice |
+| `AlertLog` | HasTenant | belongsTo: invoice |
+| `AuditLog` | (none — append-only) | static `record()` factory method |
+
+#### Shared Infrastructure
+
+- **`TenantScope`** — Eloquent global scope; auto-filters every query by `auth()->user()->tenant_id`. Bypassed for console commands.
+- **`HasTenant` trait** — applies `TenantScope` + auto-sets `tenant_id` on `creating`
+- **`HasAuditColumns` trait** — auto-sets `created_by` / `updated_by` on `creating` and `updating`
+
+#### Migrations Run
+
+```
+2026_06_19_000001_create_tenants_table              99ms  ✓
+2026_06_19_000002_add_tenant_fields_to_users_table  325ms ✓
+2026_06_19_000003_create_vendors_table              528ms ✓
+2026_06_19_000004_create_import_batches_table       247ms ✓
+2026_06_19_000005_create_purchase_invoices_table    729ms ✓
+2026_06_19_000006_create_payments_table             434ms ✓
+2026_06_19_000007_create_alert_log_table            268ms ✓
+2026_06_19_000008_create_audit_log_table             83ms ✓
+```
+
+#### Edge Cases Handled
+- Vendor category changes after invoice → `vendor_category_snapshot` preserves state at invoice time
+- Partial payment before deadline → only `balance` (stored computed) is at risk
+- Credit notes → `amount` can be negative; rules engine will skip in Phase 2
+- Duplicate CSV imports → `UNIQUE(tenant_id, invoice_number, vendor_id)` constraint rejects duplicates
+- Leap year / month-end dates → handled by Carbon in Phase 2 rules engine (tests will cover Feb 28/29)
+- Financial year spanning two calendar years → `financial_year` stored as `"2025-26"` at invoice creation
+
+#### Known Limitations / Deferred
+- No `tenant_id` on `audit_log` FK (nullable — super-admin actions have no tenant) → by design
+- GSTIN/PAN encryption at rest → Phase 9 (deployment)
+- Seeder with realistic test data → Phase 8 (testing)
 
 ---
 
