@@ -274,6 +274,9 @@ Design and implement the complete production-grade database schema covering all 
 - GSTIN/PAN encryption at rest → Phase 9 (deployment)
 - Seeder with realistic test data → Phase 8 (testing)
 
+#### Hotfix
+- `2026_06_19_000009_add_soft_deletes_to_users_table` — `SoftDeletes` was added to `User` model but `deleted_at` was missing from the `users` table. Added via separate migration.
+
 ---
 
 ### Phase 2 — Core Rules Engine *(Planned)*

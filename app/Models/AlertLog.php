@@ -9,10 +9,11 @@ use App\Models\Traits\HasTenant;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class AlertLog extends Model
 {
-    use HasFactory, HasTenant;
+    use HasFactory, HasTenant, SoftDeletes;
 
     protected $fillable = [
         'tenant_id',
