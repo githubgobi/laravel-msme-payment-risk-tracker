@@ -32,12 +32,13 @@ class AlertControllerTest extends TestCase
         parent::setUp();
 
         $this->tenant = Tenant::create([
-            'name'                => 'Alpha Corp',
-            'email'               => 'alpha@corp.com',
-            'plan'                => TenantPlan::Starter->value,
-            'subscription_status' => TenantStatus::Active->value,
-            'rbi_bank_rate'       => 6.75,
-            'is_active'           => true,
+            'name'                    => 'Alpha Corp',
+            'email'                   => 'alpha@corp.com',
+            'plan'                    => TenantPlan::Starter->value,
+            'subscription_status'     => TenantStatus::Active->value,
+            'rbi_bank_rate'           => 6.75,
+            'is_active'               => true,
+            'onboarding_completed_at' => now(),
         ]);
 
         $this->user = User::create([

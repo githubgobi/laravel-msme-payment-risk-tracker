@@ -33,12 +33,13 @@ class ImportControllerTest extends TestCase
         Bus::fake();
 
         $this->tenant = Tenant::create([
-            'name'                => 'Test Company',
-            'email'               => 'test@company.com',
-            'plan'                => TenantPlan::Starter->value,
-            'subscription_status' => TenantStatus::Active->value,
-            'rbi_bank_rate'       => 6.75,
-            'is_active'           => true,
+            'name'                    => 'Test Company',
+            'email'                   => 'test@company.com',
+            'plan'                    => TenantPlan::Starter->value,
+            'subscription_status'     => TenantStatus::Active->value,
+            'rbi_bank_rate'           => 6.75,
+            'is_active'               => true,
+            'onboarding_completed_at' => now(),
         ]);
 
         $this->user = User::create([

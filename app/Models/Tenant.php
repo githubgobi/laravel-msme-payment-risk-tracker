@@ -37,6 +37,7 @@ class Tenant extends Model
         'razorpay_subscription_id',
         'razorpay_plan_id',
         'grace_period_ends_at',
+        'onboarding_completed_at',
     ];
 
     protected function casts(): array
@@ -49,7 +50,8 @@ class Tenant extends Model
             'rbi_bank_rate'         => 'decimal:2',
             'settings'              => 'array',
             'is_active'             => 'boolean',
-            'grace_period_ends_at'  => 'datetime',
+            'grace_period_ends_at'      => 'datetime',
+            'onboarding_completed_at'   => 'datetime',
         ];
     }
 
@@ -118,5 +120,10 @@ class Tenant extends Model
     public function effectiveInterestRate(): float
     {
         return (float) $this->rbi_bank_rate * 3;
+    }
+
+    public function hasCompletedOnboarding(): bool
+    {
+        return ! is_null($this->onboarding_completed_at);
     }
 }

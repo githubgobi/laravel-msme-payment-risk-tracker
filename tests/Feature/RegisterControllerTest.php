@@ -182,11 +182,12 @@ class RegisterControllerTest extends TestCase
     private function createTenant(array $overrides = []): Tenant
     {
         return Tenant::create(array_merge([
-            'name'                => 'Existing Corp',
-            'plan'                => TenantPlan::Starter->value,
-            'subscription_status' => TenantStatus::Active->value,
-            'rbi_bank_rate'       => 6.75,
-            'is_active'           => true,
+            'name'                    => 'Existing Corp',
+            'plan'                    => TenantPlan::Starter->value,
+            'subscription_status'     => TenantStatus::Active->value,
+            'rbi_bank_rate'           => 6.75,
+            'is_active'               => true,
+            'onboarding_completed_at' => now(),
         ], $overrides));
     }
 }

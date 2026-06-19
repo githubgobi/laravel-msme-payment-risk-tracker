@@ -14,12 +14,19 @@ class TenantFactory extends Factory
     public function definition(): array
     {
         return [
-            'name'                => fake()->company(),
-            'email'               => fake()->unique()->companyEmail(),
-            'plan'                => TenantPlan::Starter->value,
-            'subscription_status' => TenantStatus::Active->value,
-            'rbi_bank_rate'       => 6.75,
-            'is_active'           => true,
+            'name'                    => fake()->company(),
+            'email'                   => fake()->unique()->companyEmail(),
+            'plan'                    => TenantPlan::Starter->value,
+            'subscription_status'     => TenantStatus::Active->value,
+            'rbi_bank_rate'           => 6.75,
+            'is_active'               => true,
+            'onboarding_completed_at' => now(),
         ];
+    }
+
+    /** Tenant in onboarding flow — has NOT completed the wizard. */
+    public function onboarding(): static
+    {
+        return $this->state(['onboarding_completed_at' => null]);
     }
 }

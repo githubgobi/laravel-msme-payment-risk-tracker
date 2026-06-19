@@ -32,13 +32,14 @@ class SubscriptionControllerTest extends TestCase
         ]);
 
         $this->tenant = Tenant::create([
-            'name'                => 'Test Company',
-            'email'               => 'test@example.com',
-            'plan'                => TenantPlan::Starter->value,
-            'subscription_status' => TenantStatus::Trial->value,
-            'trial_ends_at'       => now()->addDays(5),
-            'rbi_bank_rate'       => 6.75,
-            'is_active'           => true,
+            'name'                    => 'Test Company',
+            'email'                   => 'test@example.com',
+            'plan'                    => TenantPlan::Starter->value,
+            'subscription_status'     => TenantStatus::Trial->value,
+            'trial_ends_at'           => now()->addDays(5),
+            'rbi_bank_rate'           => 6.75,
+            'is_active'               => true,
+            'onboarding_completed_at' => now(),
         ]);
 
         $this->owner = User::create([

@@ -24,12 +24,13 @@ class CalculatorControllerTest extends TestCase
         parent::setUp();
 
         $this->tenant = Tenant::create([
-            'name'                => 'Calc Test Corp',
-            'plan'                => TenantPlan::Starter->value,
-            'subscription_status' => TenantStatus::Active->value,
-            'subscription_ends_at' => now()->addYear(),
-            'rbi_bank_rate'       => 6.75,
-            'is_active'           => true,
+            'name'                    => 'Calc Test Corp',
+            'plan'                    => TenantPlan::Starter->value,
+            'subscription_status'     => TenantStatus::Active->value,
+            'subscription_ends_at'    => now()->addYear(),
+            'rbi_bank_rate'           => 6.75,
+            'is_active'               => true,
+            'onboarding_completed_at' => now(),
         ]);
 
         $this->owner = User::factory()->create([

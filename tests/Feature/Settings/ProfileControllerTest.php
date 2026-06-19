@@ -24,12 +24,13 @@ class ProfileControllerTest extends TestCase
         parent::setUp();
 
         $this->tenant = Tenant::create([
-            'name'                => 'Profile Test Corp',
-            'plan'                => TenantPlan::Starter->value,
-            'subscription_status' => TenantStatus::Active->value,
-            'rbi_bank_rate'       => 6.75,
-            'is_active'           => true,
-            'subscription_ends_at' => now()->addYear(),
+            'name'                    => 'Profile Test Corp',
+            'plan'                    => TenantPlan::Starter->value,
+            'subscription_status'     => TenantStatus::Active->value,
+            'rbi_bank_rate'           => 6.75,
+            'is_active'               => true,
+            'subscription_ends_at'    => now()->addYear(),
+            'onboarding_completed_at' => now(),
         ]);
 
         $this->owner = User::factory()->create([
@@ -178,11 +179,12 @@ class ProfileControllerTest extends TestCase
     public function cross_tenant_isolation_on_settings(): void
     {
         $otherTenant = Tenant::create([
-            'name'                => 'Other Corp',
-            'plan'                => TenantPlan::Starter->value,
-            'subscription_status' => TenantStatus::Active->value,
-            'rbi_bank_rate'       => 6.75,
-            'is_active'           => true,
+            'name'                    => 'Other Corp',
+            'plan'                    => TenantPlan::Starter->value,
+            'subscription_status'     => TenantStatus::Active->value,
+            'rbi_bank_rate'           => 6.75,
+            'is_active'               => true,
+            'onboarding_completed_at' => now(),
         ]);
         $otherOwner = User::factory()->create([
             'tenant_id' => $otherTenant->id,

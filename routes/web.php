@@ -3,10 +3,13 @@
 use App\Http\Controllers\AlertController;
 use App\Http\Controllers\CalculatorController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\ImpersonateController;
 use App\Http\Controllers\ImportController;
 use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\OnboardingController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\RegisterController;
+use App\Http\Controllers\ReportController;
 use App\Http\Controllers\Settings\ProfileController;
 use App\Http\Controllers\Settings\TeamController;
 use App\Http\Controllers\SubscriptionController;
@@ -58,8 +61,20 @@ Route::post('/logout', function (\Illuminate\Http\Request $request) {
     return redirect('/login');
 })->name('logout')->middleware('auth');
 
+// Onboarding (auth but NO onboarding check — exempt by design)
+Route::middleware('auth')->group(function () {
+    Route::get('/onboarding',          [OnboardingController::class, 'index'])->name('onboarding.index');
+    Route::post('/onboarding/complete', [OnboardingController::class, 'complete'])->name('onboarding.complete');
+});
+
+// Impersonation (super-admin only, leave route is accessible while impersonating)
+Route::middleware('auth')->group(function () {
+    Route::post('/admin/impersonate/{tenant}', [ImpersonateController::class, 'start'])->name('admin.impersonate');
+    Route::get('/impersonate/leave',           [ImpersonateController::class, 'leave'])->name('admin.impersonate.leave');
+});
+
 // Authenticated + active-tenant routes
-Route::middleware(['auth', 'tenant.active'])->group(function () {
+Route::middleware(['auth', 'tenant.active', 'onboarding'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     // Vendor routes (static paths must come before {vendor} wildcard)
@@ -106,4 +121,9 @@ Route::middleware(['auth', 'tenant.active'])->group(function () {
     Route::post('/settings/team',          [TeamController::class, 'store'])->name('settings.team.store');
     Route::put('/settings/team/{user}',    [TeamController::class, 'update'])->name('settings.team.update');
     Route::delete('/settings/team/{user}', [TeamController::class, 'destroy'])->name('settings.team.destroy');
+
+    // Annual 43B(h) reports
+    Route::get('/reports',              [ReportController::class, 'index'])->name('reports.index');
+    Route::get('/reports/{fy}/pdf',     [ReportController::class, 'pdf'])->name('reports.pdf')->where('fy', '[0-9]{4}');
+    Route::get('/reports/{fy}/excel',   [ReportController::class, 'excel'])->name('reports.excel')->where('fy', '[0-9]{4}');
 });

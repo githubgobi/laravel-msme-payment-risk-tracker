@@ -108,10 +108,11 @@ class EnsureActiveTenantTest extends TestCase
     private function makeTenant(array $overrides): Tenant
     {
         return Tenant::create(array_merge([
-            'name'         => 'Test Corp',
-            'plan'         => TenantPlan::Starter->value,
-            'rbi_bank_rate' => 6.75,
-            'is_active'    => true,
+            'name'                    => 'Test Corp',
+            'plan'                    => TenantPlan::Starter->value,
+            'rbi_bank_rate'           => 6.75,
+            'is_active'               => true,
+            'onboarding_completed_at' => now(),
         ], $overrides));
     }
 
