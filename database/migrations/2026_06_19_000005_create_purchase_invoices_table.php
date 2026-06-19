@@ -20,7 +20,12 @@ return new class extends Migration
             // Monetary values stored as DECIMAL(15,2) — avoids float precision issues
             $table->decimal('amount', 15, 2);
             $table->decimal('paid_amount', 15, 2)->default(0.00);
-            $table->decimal('balance', 15, 2)->storedAs('amount - paid_amount');
+            // MySQL: stored computed column; SQLite (used in tests) falls back to regular column
+            if (Schema::getConnection()->getDriverName() === 'mysql') {
+                $table->decimal('balance', 15, 2)->storedAs('amount - paid_amount');
+            } else {
+                $table->decimal('balance', 15, 2)->default(0.00);
+            }
 
             $table->string('currency', 3)->default('INR');
 

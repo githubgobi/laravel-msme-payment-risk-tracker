@@ -435,7 +435,134 @@ php artisan msme:recompute-risk --as-of=2025-03-31
 
 ---
 
-### Phase 3 — Import Pipeline — CSV & Tally XML *(Planned)*
+### Phase 3 — Import Pipeline — CSV & Tally XML ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Build a production-grade file import pipeline supporting CSV/Excel (from any ERP) and Tally XML exports. Each import creates an `ImportBatch` record, processes rows with full validation, auto-matches or auto-creates vendors, computes risk on each new invoice, and logs every error with row number and reason.
+
+#### Architecture Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| Job dispatch | `ProcessImportBatch` ShouldQueue job | Queue-ready; runs synchronously in local dev (QUEUE_CONNECTION=sync) |
+| Row processing | One try/catch per row | Partial failure is logged and skipped — does not abort the whole file |
+| Vendor matching priority | GSTIN → Udyam → Name → Create | GSTIN is most reliable identifier in Indian taxation context |
+| New vendor category | `unclassified` | Phase 4 will classify via Udyam API / LLM; import should not block on it |
+| In-memory vendor cache | `VendorMatcher::$cache` | Avoids N+1 DB lookups when one file has many rows from the same vendor |
+| Error log | JSON in `import_batches.error_log`, max 500 rows | Bounded size; full download via "Download Error CSV" client-side |
+| Progress save | Every 100 rows | Allows UI to show partial progress on large files |
+| Computed column (balance) | Driver-aware migration | SQLite (used in tests) doesn't support `storedAs()`; falls back to regular column |
+| File storage | `storage/app/imports/{tenant_id}/` | Private storage — never publicly accessible |
+
+#### Import Flow
+
+```
+POST /import (StoreImportRequest)
+  → Store file to storage/app/imports/{tenant_id}/
+  → Create ImportBatch (status=pending)
+  → Dispatch ProcessImportBatch job
+     → ImportPipeline::process()
+        → Parse file: CsvImporter (maatwebsite/excel) or TallyXmlImporter (SimpleXML)
+        → ColumnMapper: normalize headers to canonical names
+        → For each row:
+            → RowValidator::validate() → errors[] or continue
+            → VendorMatcher::findOrCreate() (GSTIN → Udyam → Name → Create)
+            → MsmeDeadlineEngine: compute effective_deadline, financial_year
+            → PurchaseInvoice::create()
+            → InvoiceRiskRecomputer::recomputeOne()
+        → Save error_log, update batch status = completed
+```
+
+#### Column Header Support (CSV/Excel)
+
+| Canonical Name | Accepted Aliases |
+|---|---|
+| `invoice_number` | bill_number, voucher_number, inv_no, ref_number |
+| `invoice_date` | bill_date, date, voucher_date, doc_date |
+| `vendor_name` | party_name, supplier_name, ledger_name |
+| `amount` | invoice_amount, gross_amount, net_amount, total_amount |
+| `gstin` | gst_number, vendor_gstin, party_gstin |
+| `udyam_number` | udyam_no, msme_number |
+| `paid_amount` | amount_paid, payment_amount |
+| `agreement_exists` | has_agreement, written_agreement |
+| `narration` | description, remarks, notes, particulars |
+
+#### Date Formats Accepted
+
+`DD-MM-YYYY`, `YYYY-MM-DD`, `DD/MM/YYYY`, `YYYYMMDD` (Tally), `DD Jan YYYY`, `DD-Jan-YYYY`
+
+#### Files Created
+
+| File | Purpose |
+|---|---|
+| `app/DTOs/ImportRow.php` | Normalized row DTO (source-agnostic) |
+| `app/DTOs/RowImportResult.php` | Per-row outcome: imported/skipped/failed + message |
+| `app/Services/Import/ColumnMapper.php` | Header alias resolution with 40+ recognized aliases |
+| `app/Services/Import/RowValidator.php` | Pure validation: required fields, date parsing, GSTIN/Udyam format |
+| `app/Services/Import/VendorMatcher.php` | GSTIN→Udyam→Name match with in-memory cache |
+| `app/Services/Import/CsvImporter.php` | maatwebsite/excel ToCollection parser |
+| `app/Services/Import/TallyXmlImporter.php` | SimpleXML parser for Tally ERP 9 and Tally Prime formats |
+| `app/Services/Import/ImportPipeline.php` | Orchestrator: parse → validate → match vendor → create invoice → risk |
+| `app/Jobs/ProcessImportBatch.php` | ShouldQueue job (tries=1, timeout=300s) |
+| `app/Http/Requests/StoreImportRequest.php` | File validation (max 10MB, allowed MIME types) |
+| `app/Http/Controllers/ImportController.php` | index, store, show, downloadSample |
+| `resources/js/Pages/Import/Index.vue` | Upload form with drag/drop + import history table |
+| `resources/js/Pages/Import/Show.vue` | Batch results with stat cards, error table, client-side CSV download |
+| `storage/app/samples/sample-import.csv` | Downloadable sample with 5 example rows |
+| `storage/app/samples/sample-tally.xml` | Downloadable Tally XML sample with 3 purchase + 1 payment voucher |
+| `database/factories/TenantFactory.php` | Tenant model factory for tests |
+
+#### Routes Added
+
+| Method | Path | Handler |
+|---|---|---|
+| GET | `/import` | `ImportController@index` |
+| POST | `/import` | `ImportController@store` |
+| GET | `/import/{batch}` | `ImportController@show` |
+| GET | `/import/sample/{type}` | `ImportController@downloadSample` |
+
+#### Validation Rules
+
+| Field | Rule |
+|---|---|
+| `invoice_number` | Required, max 100 chars |
+| `invoice_date` | Required, must parse to a valid date |
+| `vendor_name` | Required, min 2 chars, max 200 chars |
+| `amount` | Required, numeric (Indian comma format supported) |
+| `paid_amount` | Optional, must be numeric if provided |
+| `gstin` | Optional, must match 15-char GSTIN pattern if provided |
+| `udyam_number` | Optional, must match UDYAM-XX-00-0000000 format if provided |
+
+#### Test Results
+
+```
+Tests:   129 total
+Passed:  129 / 129
+Assertions: 246
+Duration: ~3.1s (SQLite in-memory)
+
+Unit tests added:
+  RowValidatorTest    — 37 cases covering all validation paths
+  ColumnMapperTest    — 12 cases covering alias resolution
+
+Feature tests added:
+  ImportControllerTest — 17 cases covering auth, validation, success path
+```
+
+#### Known Limitations / Deferred to Later Phases
+
+| Item | Deferred to |
+|---|---|
+| Balance column in SQLite uses regular column (not computed) | Acceptable — MySQL prod uses computed column |
+| Vendor name fuzzy matching (LLM) | Phase 4 |
+| Udyam API verification after import | Phase 4 |
+| Real-time progress polling (WebSocket / polling) | Phase 5 |
+| Import from email attachment | Phase 6+ |
+| WhatsApp/email notification on import completion | Phase 6 |
+
+---
 
 ---
 

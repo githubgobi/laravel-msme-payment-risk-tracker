@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\ImportController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -45,7 +46,12 @@ Route::middleware('auth')->group(function () {
     Route::get('/vendors',    fn () => Inertia::render('Vendors/Index'))->name('vendors.index');
     Route::get('/invoices',   fn () => Inertia::render('Invoices/Index'))->name('invoices.index');
     Route::get('/payments',   fn () => Inertia::render('Payments/Index'))->name('payments.index');
-    Route::get('/import',     fn () => Inertia::render('Import/Index'))->name('import.index');
     Route::get('/alerts',     fn () => Inertia::render('Alerts/Index'))->name('alerts.index');
     Route::get('/calculator', fn () => Inertia::render('Calculator/Index'))->name('calculator.index');
+
+    // Import routes
+    Route::get('/import',                       [ImportController::class, 'index'])->name('import.index');
+    Route::post('/import',                      [ImportController::class, 'store'])->name('import.store');
+    Route::get('/import/{batch}',               [ImportController::class, 'show'])->name('import.show');
+    Route::get('/import/sample/{type}',         [ImportController::class, 'downloadSample'])->name('import.sample');
 });
