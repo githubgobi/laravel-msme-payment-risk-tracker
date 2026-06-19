@@ -1089,7 +1089,128 @@ Duration:      ~7.8s (SQLite in-memory)
 
 ---
 
-### Phase 8 — Testing *(Planned)*
+### Phase 8 — Core Features, Testing & Factory Data ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+
+Complete the three core customer-facing features that were blocked on placeholders (Invoice CRUD, Payment recording, 43B(h) Calculator), write comprehensive test factories and a realistic demo seeder, and close all test coverage gaps with 301 passing tests.
+
+#### Architecture Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| `balance` column in tests | Regular SQLite column (not computed) | MySQL supports `storedAs()` generated columns; SQLite does not. PaymentController computes via SUM — both drivers are consistent |
+| Payments nested under invoices | `DELETE /invoices/{invoice}/payments/{payment}` | Payments are always in the context of an invoice; no standalone payments list page needed |
+| Calculator endpoint returns JSON | `POST /calculator/compute → JsonResponse` | Called via Axios from Vue; must return JSON for both success and validation errors |
+| `shouldRenderJsonWhen` updated | Excludes `AuthenticationException` explicitly | Auth redirects must remain web redirects; validation errors on Axios routes must return 422 JSON |
+| `InvoiceController::destroy` blocks if payments | Redirect back with errors (not abort) | 409 Conflict with session error gives the Inertia page context to display the block reason |
+| `daysToDeadline` computed outside DTO | Calculated in controller from `Carbon::today()->diffInDays(deadline)` | `RiskAssessment` DTO is stateless/timeless; "today" is a runtime context |
+| Factories set `balance` manually | `'balance' => $data['amount'] - ($data['paid_amount'] ?? 0)` | In SQLite test DB, balance is not computed; factory must maintain invariant |
+
+#### Files Created
+
+##### Controllers
+
+| File | Purpose |
+|---|---|
+| `app/Http/Controllers/InvoiceController.php` | `index()` (paginated, filtered), `show()`, `update()` (deadline recalculate on agreement toggle), `destroy()` (blocked if payments exist) |
+| `app/Http/Controllers/PaymentController.php` | `store()` (DB::transaction → SUM paid_amount → recompute risk), `destroy()` (verify tenant ownership → re-SUM → recompute) |
+| `app/Http/Controllers/CalculatorController.php` | `index()` (passes vendor categories + tenant RBI rate), `compute()` (POST → JSON risk assessment) |
+
+##### Form Requests
+
+| File | Rules |
+|---|---|
+| `app/Http/Requests/UpdateInvoiceRequest.php` | `canManageInvoices()` authorize; narration (nullable, max 1000), agreement_exists (sometimes, boolean) |
+| `app/Http/Requests/StorePaymentRequest.php` | `canManageInvoices()` authorize; amount (max = current balance), payment_date (before_or_equal:today), payment_mode (Enum), reference/notes optional |
+
+##### Vue Pages
+
+| File | Features |
+|---|---|
+| `resources/js/Pages/Invoices/Index.vue` | 4 KPI stat cards, debounced search, status/FY/vendor filters, quick pills, sortable table, Inertia pagination |
+| `resources/js/Pages/Invoices/Show.vue` | Risk panel (amount/paid/balance/exposure), edit form (narration + agreement toggle), payment history with delete, record payment form, urgency sidebar, vendor info sidebar, danger zone |
+| `resources/js/Pages/Calculator/Index.vue` | Category selector with 43B(h) indicator, invoice params form, live results panel (deadline, days status, disallowance, interest, effective tax rate, formula reference) |
+
+##### Factories & Seeder
+
+| File | Purpose |
+|---|---|
+| `database/factories/PurchaseInvoiceFactory.php` | States: pending/partial/paid/overdue/disallowed/withAgreement/micro/small/medium/forTenant/forVendor |
+| `database/factories/PaymentFactory.php` | States: neft/upi/forInvoice |
+| `database/factories/ImportBatchFactory.php` | States: pending/failed/tallyXml/forTenant |
+| `database/seeders/DatabaseSeeder.php` | Two realistic tenants: "Arjun Textiles" (Starter, Active, 8 vendors, ~20 invoices) + "Rajesh & Associates" (Growth, Trial, 6 vendors, ~10 invoices) |
+
+##### Tests
+
+| File | Tests | What is Covered |
+|---|---|---|
+| `tests/Unit/Services/InvoiceRiskRecomputerTest.php` | 8 | pending/overdue/paid status transitions, large vendor → zero disallowance, recomputeForTenant skips paid, recomputeForVendor scoped, uses tenant bank rate, marks Disallowed after FY end |
+| `tests/Unit/Services/VendorClassificationServiceTest.php` | 8 | classify updates category, dispatches job on change, no job when unchanged, records verification source, updates udyam_number, bulkClassify count, skips already-classified, dispatches per-changed vendor |
+| `tests/Feature/EnsureActiveTenantTest.php` | 7 | active passes, trial-active passes, trial-expired → 402, subscription-expired → 402, inactive → 402, suspended → 402, super-admin passes |
+| `tests/Feature/InvoiceControllerTest.php` | 14 | auth redirect, index props, tenant isolation, status filter, FY filter, search, show renders detail, show 404 cross-tenant, owner updates narration, agreement toggle recalculates deadline, viewer blocked, soft delete, destroy blocked with payments |
+| `tests/Feature/PaymentControllerTest.php` | 10 | owner records payment, paid_amount updated, full payment → Paid status, amount > balance rejected, future date rejected, invalid mode rejected, finance can record, viewer blocked, owner deletes + recompute, cross-tenant payment → 404 |
+| `tests/Feature/CalculatorControllerTest.php` | 7 | index renders props, Micro overdue → disallowance, Medium → zero, paid → Paid status, pre-deadline → Pending, agreement → 45-day deadline, validation errors (missing fields + bank_rate > 25) |
+
+#### Routes Added
+
+| Method | Path | Handler |
+|---|---|---|
+| GET | `/invoices` | `InvoiceController@index` |
+| GET | `/invoices/{invoice}` | `InvoiceController@show` |
+| PUT | `/invoices/{invoice}` | `InvoiceController@update` |
+| DELETE | `/invoices/{invoice}` | `InvoiceController@destroy` |
+| POST | `/invoices/{invoice}/payments` | `PaymentController@store` |
+| DELETE | `/invoices/{invoice}/payments/{payment}` | `PaymentController@destroy` |
+| GET | `/calculator` | `CalculatorController@index` |
+| POST | `/calculator/compute` | `CalculatorController@compute` |
+
+#### Demo Seeder Data
+
+```
+Tenant 1: Arjun Textiles Pvt Ltd (Starter plan, Active subscription)
+  ├── Owner: arjun@arjuntextiles.com / password
+  ├── Finance: priya@arjuntextiles.com / password
+  ├── 8 vendors (3 Micro, 2 Small, 1 Medium, 1 Large, 1 Unclassified)
+  ├── ~20 invoices (mix of all statuses: pending, partial, overdue, disallowed, paid)
+  └── 8 payments across invoices
+
+Tenant 2: Rajesh & Associates (Growth plan, Trial — 10 days left)
+  ├── Owner: rajesh@rajeshca.com / password
+  ├── 6 vendors (2 Micro, 2 Small, 2 Unclassified)
+  ├── ~10 invoices
+  └── 5 payments
+```
+
+#### Key Bug Fixed
+
+`bootstrap/app.php` `shouldRenderJsonWhen` callback was configured as `fn ($r) => $r->is('api/*')` — this caused `ValidationException` on `/calculator/compute` (called via Axios with `Accept: application/json`) to redirect instead of returning 422 JSON. Fixed to:
+```php
+fn (Request $request, Throwable $e): bool => $e instanceof AuthenticationException
+    ? false  // auth always redirects (Inertia SPA behaviour)
+    : $request->is('api/*') || $request->expectsJson()
+```
+
+#### Test Results
+
+```
+Phase 8 new tests: 54
+Full suite: 301 tests / 301 passing / 960 assertions
+Duration: ~24s (SQLite in-memory)
+Frontend: npm run build ✓ (no errors; ApexCharts chunk warning is expected)
+```
+
+#### Known Limitations / Deferred
+
+| Item | Deferred to |
+|---|---|
+| Razorpay / Stripe payment integration | Phase 9 |
+| YearEndSummary manual send UI | Phase 9 |
+| CA Firm multi-client management UI | Phase 9 |
+| Create vendor manually (without import) | Phase 9 |
+| Vendor merge / de-duplicate UI | Phase 9 |
 
 ---
 

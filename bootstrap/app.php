@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -22,6 +23,13 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*'),
+            function (Request $request, Throwable $e): bool {
+                // Always redirect to login for unauthenticated requests (web Inertia SPA behaviour)
+                if ($e instanceof AuthenticationException) {
+                    return false;
+                }
+                // Return JSON for API routes or any request that explicitly accepts JSON (e.g. Axios)
+                return $request->is('api/*') || $request->expectsJson();
+            }
         );
     })->create();

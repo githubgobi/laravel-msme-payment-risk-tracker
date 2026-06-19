@@ -1,8 +1,11 @@
 <?php
 
 use App\Http\Controllers\AlertController;
+use App\Http\Controllers\CalculatorController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ImportController;
+use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\RegisterController;
 use App\Http\Controllers\Settings\ProfileController;
 use App\Http\Controllers\Settings\TeamController;
@@ -61,9 +64,19 @@ Route::middleware(['auth', 'tenant.active'])->group(function () {
 
     // Udyam API verification
     Route::post('/udyam/verify',                [UdyamVerificationController::class, 'verify'])->name('udyam.verify');
-    Route::get('/invoices',   fn () => Inertia::render('Invoices/Index'))->name('invoices.index');
-    Route::get('/payments',   fn () => Inertia::render('Payments/Index'))->name('payments.index');
-    Route::get('/calculator', fn () => Inertia::render('Calculator/Index'))->name('calculator.index');
+    // Invoice routes
+    Route::get('/invoices',                              [InvoiceController::class, 'index'])->name('invoices.index');
+    Route::get('/invoices/{invoice}',                    [InvoiceController::class, 'show'])->name('invoices.show');
+    Route::put('/invoices/{invoice}',                    [InvoiceController::class, 'update'])->name('invoices.update');
+    Route::delete('/invoices/{invoice}',                 [InvoiceController::class, 'destroy'])->name('invoices.destroy');
+
+    // Payment routes (nested under invoice)
+    Route::post('/invoices/{invoice}/payments',                    [PaymentController::class, 'store'])->name('invoices.payments.store');
+    Route::delete('/invoices/{invoice}/payments/{payment}',        [PaymentController::class, 'destroy'])->name('invoices.payments.destroy');
+
+    // Calculator
+    Route::get('/calculator',         [CalculatorController::class, 'index'])->name('calculator.index');
+    Route::post('/calculator/compute', [CalculatorController::class, 'compute'])->name('calculator.compute');
 
     // Alert routes (settings must come before any future {alert} wildcard)
     Route::get('/alerts',             [AlertController::class, 'index'])->name('alerts.index');
