@@ -1597,15 +1597,130 @@ php artisan key:generate
 # 5. Create MySQL database
 mysql -u root -e "CREATE DATABASE msme_risk_tracker CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-# 6. Run migrations
-php artisan migrate
+# 6. Run migrations and seed demo data
+php artisan migrate:fresh --seed
 
 # 7. Build frontend assets
 npm run build
 
-# 8. Access admin panel
-# http://msme-pament-risk-tracker.test/admin
+# 8. Access the app
+# http://msme-pament-risk-tracker.test/login
+# http://msme-pament-risk-tracker.test/admin  (super-admin only)
 ```
+
+---
+
+## Demo Credentials
+
+Seed command: `php artisan migrate:fresh --seed`
+
+### Super Admin
+
+| Email | Password | Entry point |
+|---|---|---|
+| `superadmin@msme.local` | `Admin@1234` | `/admin` (Filament panel) |
+
+The super-admin has no tenant. Goes directly to the Filament admin panel — can view all tenants, suspend/activate them, and impersonate any tenant owner.
+
+---
+
+### Tenant 1 — Arjun Textiles Pvt Ltd
+
+**Plan:** Starter &nbsp;|&nbsp; **Status:** Active &nbsp;|&nbsp; **Data:** Full — vendors, invoices (pending / partial / paid / overdue / disallowed), payments, import batch
+
+| Role | Email | Password |
+|---|---|---|
+| Owner | `arjun@arjuntextiles.com` | `password` |
+| Admin | `admin@arjuntextiles.com` | `password` |
+| Finance Manager | `priya@arjuntextiles.com` | `password` |
+| Viewer | `viewer@arjuntextiles.com` | `password` |
+
+---
+
+### Tenant 2 — Rajesh & Associates
+
+**Plan:** Growth &nbsp;|&nbsp; **Status:** Trial (10 days remaining) &nbsp;|&nbsp; **Data:** Vendors + invoices
+
+| Role | Email | Password |
+|---|---|---|
+| Owner | `rajesh@rajeshca.com` | `password` |
+| Finance Manager | `accounts@rajeshca.com` | `password` |
+
+---
+
+### Tenant 3 — Sharma Enterprises
+
+**Plan:** Starter &nbsp;|&nbsp; **Status:** ⛔ Suspended &nbsp;|&nbsp; **Purpose:** Test the access-blocked flow
+
+| Role | Email | Password |
+|---|---|---|
+| Owner | `sharma@sharmaent.com` | `password` |
+
+> Login succeeds, but every protected route (`/dashboard`, `/vendors`, `/invoices`) returns **402 Payment Required**.
+
+---
+
+### Tenant 4 — Global CA Partners LLP
+
+**Plan:** CA Firm (unlimited vendors + users) &nbsp;|&nbsp; **Status:** Active &nbsp;|&nbsp; **Purpose:** Multi-user CA firm scenario
+
+| Role | Email | Password |
+|---|---|---|
+| Owner | `admin@globalca.com` | `password` |
+| Admin | `manager@globalca.com` | `password` |
+| Finance Manager | `finance@globalca.com` | `password` |
+| Viewer | `viewer@globalca.com` | `password` |
+
+---
+
+## Recommended Testing Flow
+
+### 1. Super Admin Panel
+1. Login as `superadmin@msme.local` / `Admin@1234` → redirected to `/admin`
+2. Open **Tenants** resource → see all 4 tenants
+3. Click **Impersonate** on Arjun Textiles → lands on `/dashboard` with their data
+4. Visit `/impersonate/leave` → returns to `/admin`
+
+### 2. Active Tenant — Full Data (Arjun Textiles)
+1. Login as `arjun@arjuntextiles.com` / `password`
+2. **Dashboard** → risk summary tiles, overdue count, charts
+3. **Vendors** → 8 vendors across all categories (Micro / Small / Medium / Large / Unclassified)
+4. **Invoices** → all statuses visible; filter by status, FY, vendor
+5. Click an overdue invoice → see disallowance + interest breakdown
+6. **Reports** → download PDF and Excel for FY 2025-26 and 2026-27
+7. **Settings** → update profile, view billing tab (plan + renewal date)
+8. Logout → login as `viewer@arjuntextiles.com` → verify all edit/classify/delete buttons are hidden
+
+### 3. Trial Tenant (Rajesh & Associates)
+1. Login as `rajesh@rajeshca.com` / `password`
+2. App loads normally (trial not expired)
+3. **Settings → Billing** → shows "Trial — 10 days remaining"
+
+### 4. Suspended Tenant (Sharma Enterprises)
+1. Login as `sharma@sharmaent.com` / `password`
+2. Every route returns **402 Payment Required** with upgrade prompt
+
+### 5. Role Permission Verification (Arjun Textiles)
+| Login | Can edit vendors/invoices? | Can manage team? | Can export reports? |
+|---|---|---|---|
+| `arjun@…` (Owner) | ✅ | ✅ | ✅ |
+| `admin@…` (Admin) | ✅ | ✅ | ✅ |
+| `priya@…` (Finance) | ✅ | ❌ | ✅ |
+| `viewer@…` (Viewer) | ❌ | ❌ | ✅ |
+
+### 6. Tenant Isolation
+1. Login as `arjun@arjuntextiles.com` → see Arjun's invoices only
+2. Logout → login as `rajesh@rajeshca.com` → see only Rajesh's data
+3. No cross-tenant data leaks anywhere
+
+### 7. AI Vendor Classification (requires Ollama)
+```bash
+ollama pull qwen2.5:3b
+# Set LLM_ENABLED=true in .env
+php artisan ai:classify-vendors --dry-run   # preview
+php artisan ai:classify-vendors             # apply
+```
+Or via UI: login → `/vendors/ai-review`
 
 ### .env Quick Reference (local dev)
 
