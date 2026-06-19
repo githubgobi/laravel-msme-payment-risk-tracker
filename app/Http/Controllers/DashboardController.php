@@ -2,27 +2,29 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\DashboardService;
+use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class DashboardController extends Controller
 {
-    public function index(): Response
+    public function __construct(
+        private readonly DashboardService $dashboard,
+    ) {}
+
+    public function index(Request $request): Response
     {
+        $fy = $this->dashboard->resolveFy($request->get('fy'));
+
         return Inertia::render('Dashboard', [
-            'stats' => [
-                'total_at_risk'           => 0,
-                'due_this_week'           => 0,
-                'projected_disallowance'  => 0,
-                'projected_interest'      => 0,
-            ],
-            'atRiskInvoices' => [],
-            'vendorCounts'   => [
-                'micro'        => 0,
-                'small'        => 0,
-                'medium'       => 0,
-                'unclassified' => 0,
-            ],
+            'financialYear'       => $fy,
+            'availableYears'      => $this->dashboard->availableYears(),
+            'stats'               => $this->dashboard->summaryStats($fy),
+            'atRiskInvoices'      => $this->dashboard->atRiskInvoices($fy),
+            'vendorCounts'        => $this->dashboard->vendorBreakdown(),
+            'monthlyTrend'        => $this->dashboard->monthlyTrend($fy),
+            'unclassifiedVendors' => $this->dashboard->unclassifiedVendorCount(),
         ]);
     }
 }

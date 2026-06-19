@@ -698,7 +698,100 @@ Duration: ~4.2s (SQLite in-memory)
 
 ---
 
-### Phase 5 — Dashboard UI *(Planned)*
+### Phase 5 — Dashboard UI with Real Data ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Replace the hardcoded-zero dashboard with a fully live data view. Finance managers can see their 43B(h) risk exposure the moment they log in, switch between financial years, and spot unclassified vendor blind spots through a prominent warning banner.
+
+#### Architecture Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| `DashboardService` class | All queries in one service | Keeps controller thin; service is independently testable |
+| Monthly trend in PHP | Load invoice rows, group in PHP | Avoids MySQL `MONTH()` vs SQLite `strftime()` dialect mismatch in tests |
+| FY filter via `?fy=` query param | Inertia GET, no JS store | Sharable URLs; browser back button works; no global state |
+| Invalid `?fy=` silently falls back | No 422/redirect | Dashboard should never hard-fail on a bad URL param |
+| All queries use `TenantScope` | Automatic (from auth) | No manual `where tenant_id` needed — safe by default |
+| At-risk list: top 15, sorted by urgency | Overdue first → deadline ASC | Finance manager cares most about what needs action NOW |
+
+#### Widgets Delivered
+
+| Widget | Description |
+|---|---|
+| **At-Risk Balance** KPI | Unpaid balance on Micro/Small invoices at risk (current FY, selected FY) |
+| **Due This Week** KPI | Count of invoices with deadline within 7 days |
+| **Projected Disallowance** KPI | `SUM(disallowance_amount)` across all non-paid invoices |
+| **Projected Interest** KPI | `SUM(interest_amount)` across all non-paid invoices |
+| **FY Tabs** | Switch between financial years (current FY shown by default) |
+| **Unclassified Vendor Banner** | Warning with count + direct link to classify — shown when count > 0 |
+| **At-Risk Invoice Table** | Top 15 invoices sorted overdue-first then by deadline ASC; shows vendor name, balance, deadline, days remaining, tax exposure, status badge |
+| **Overdue Alert Card** | Red panel showing count if any invoices are overdue in selected FY |
+| **Vendor Coverage Sidebar** | Count by category (Micro/Small/Medium/Large/Unclassified) + total |
+| **Monthly Trend Chart** | ApexCharts grouped bar — disallowance (orange) + interest (purple) per month in India FY order (Apr → Mar) |
+
+#### Files Modified / Created
+
+| File | Change |
+|---|---|
+| `app/Services/DashboardService.php` | New — `summaryStats()`, `atRiskInvoices()`, `vendorBreakdown()`, `monthlyTrend()`, `unclassifiedVendorCount()`, `availableYears()`, `currentFy()`, `resolveFy()` |
+| `app/Http/Controllers/DashboardController.php` | Updated — now uses `DashboardService`, reads `?fy` param |
+| `resources/js/Pages/Dashboard.vue` | Updated — FY tabs, unclassified banner, real data binding, trend chart (ApexCharts), overdue alert card |
+| `tests/Feature/DashboardControllerTest.php` | New — 19 feature tests |
+
+#### `DashboardService` Query Overview
+
+```
+summaryStats(fy):
+  → 1 query: SELECT COUNT(*), SUM(amount-paid_amount), SUM(disallowance), SUM(interest)
+             WHERE status IN (pending, partial, overdue) AND financial_year = ?
+  → 1 query: COUNT WHERE status = overdue
+  → 1 query: COUNT WHERE deadline BETWEEN today AND today+7
+
+atRiskInvoices(fy, limit=15):
+  → 1 query: SELECT invoices + JOIN vendor (eager load)
+             ORDER BY overdue first, then deadline ASC LIMIT 15
+
+vendorBreakdown():
+  → 1 query: SELECT category, COUNT(*) GROUP BY category
+
+monthlyTrend(fy):
+  → 1 query: SELECT invoice_date, disallowance_amount, interest_amount, status
+             WHERE financial_year = ?
+  → Grouped in PHP by invoice_date.month
+  → Returns 12 entries (Apr → Mar)
+```
+
+#### Test Results
+
+```
+Tests:   178 total (all passing)
+         + 19 feature tests (DashboardControllerTest)
+Passed:  178 / 178
+Assertions: 546
+Duration: ~12s (SQLite in-memory)
+
+Test coverage:
+  - Auth redirect
+  - Empty state (zero invoices → zero stats)
+  - FY default (current FY)
+  - Valid FY query param respected
+  - Invalid FY param falls back to current FY (no crash)
+  - Disallowance/interest aggregation
+  - Overdue count isolated
+  - Due-this-week count
+  - FY isolation (invoices from other FY not counted)
+  - At-risk list sorted (overdue before pending)
+  - At-risk list includes vendor name via eager load
+  - Paid invoices excluded from at-risk list
+  - Vendor breakdown counts
+  - Unclassified vendor count
+  - Monthly trend returns 12 months
+  - Monthly trend aggregates disallowance correctly
+  - Tenant isolation (other tenant's data invisible)
+  - Available years always includes current FY
+```
 
 ---
 
