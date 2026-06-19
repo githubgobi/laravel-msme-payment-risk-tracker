@@ -6,6 +6,7 @@ use App\Enums\InvoiceStatus;
 use App\Enums\VendorCategory;
 use App\Models\PurchaseInvoice;
 use App\Models\Tenant;
+use App\Models\Vendor;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
@@ -48,6 +49,31 @@ final class InvoiceRiskRecomputer
             'updated'   => $updated,
             'as_of'     => $asOf->toDateString(),
         ]);
+
+        return $updated;
+    }
+
+    /**
+     * Recompute risk for all non-paid invoices of a single vendor.
+     * Called after vendor category changes to re-score existing invoices.
+     * Returns count of invoices updated.
+     */
+    public function recomputeForVendor(Vendor $vendor, ?Carbon $asOf = null): int
+    {
+        $asOf     = $asOf ?? Carbon::today();
+        $bankRate = (float) ($vendor->tenant?->rbi_bank_rate ?? MsmeDeadlineEngine::DEFAULT_RBI_BANK_RATE);
+        $updated  = 0;
+
+        PurchaseInvoice::withoutGlobalScopes()
+            ->where('vendor_id', $vendor->id)
+            ->whereNotIn('status', [InvoiceStatus::Paid->value])
+            ->whereNull('deleted_at')
+            ->chunk(200, function ($invoices) use ($asOf, $bankRate, &$updated) {
+                foreach ($invoices as $invoice) {
+                    $this->recomputeOne($invoice, $asOf, $bankRate);
+                    $updated++;
+                }
+            });
 
         return $updated;
     }

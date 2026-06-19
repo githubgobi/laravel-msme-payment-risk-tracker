@@ -35,4 +35,10 @@ return [
         ],
     ],
 
+    // Surepass — Udyam / MSME verification API (India)
+    // Get your key at: https://surepass.io
+    'surepass' => [
+        'token' => env('SUREPASS_API_KEY'),
+    ],
+
 ];

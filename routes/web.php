@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ImportController;
+use App\Http\Controllers\UdyamVerificationController;
+use App\Http\Controllers\VendorController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -43,7 +45,14 @@ Route::middleware('auth')->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     // Placeholder routes for nav links — controllers added in later phases
-    Route::get('/vendors',    fn () => Inertia::render('Vendors/Index'))->name('vendors.index');
+    // Vendor routes (bulk-classify must come before {vendor} wildcard)
+    Route::post('/vendors/bulk-classify',       [VendorController::class, 'bulkClassify'])->name('vendors.bulk-classify');
+    Route::get('/vendors',                      [VendorController::class, 'index'])->name('vendors.index');
+    Route::get('/vendors/{vendor}',             [VendorController::class, 'show'])->name('vendors.show');
+    Route::put('/vendors/{vendor}',             [VendorController::class, 'update'])->name('vendors.update');
+
+    // Udyam API verification
+    Route::post('/udyam/verify',                [UdyamVerificationController::class, 'verify'])->name('udyam.verify');
     Route::get('/invoices',   fn () => Inertia::render('Invoices/Index'))->name('invoices.index');
     Route::get('/payments',   fn () => Inertia::render('Payments/Index'))->name('payments.index');
     Route::get('/alerts',     fn () => Inertia::render('Alerts/Index'))->name('alerts.index');

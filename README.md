@@ -566,7 +566,135 @@ Feature tests added:
 
 ---
 
-### Phase 4 — Vendor Classification & Udyam Verification *(Planned)*
+### Phase 4 — Vendor Classification & Udyam Verification ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Enable finance teams to classify vendors imported as `unclassified` into the correct MSME category (Micro/Small/Medium/Large), verify Udyam registration numbers against the government database via the Surepass API, and automatically propagate category changes to all existing non-paid invoices so risk scores stay accurate.
+
+#### Architecture Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| Propagation is async | `PropagateVendorClassification` queue job | Category change can affect hundreds of invoices; HTTP response must not block |
+| Two-step propagation | Update `vendor_category_snapshot`, then run `InvoiceRiskRecomputer` | Snapshot is the source of truth; risk is re-derived from it |
+| Verification degrades gracefully | `UdyamVerifierService` returns `notConfigured` / `failed` / `notFound` — never throws | Missing API key or network error must not crash the UI |
+| Bulk classify limit | Max 100 vendors per request | Prevents runaway job fan-out; each vendor dispatches its own propagation job |
+| Category changes fire on diff | `VendorClassificationService::classify()` checks old vs new category | Prevents redundant propagation jobs when category is unchanged |
+| `TenantScope` fixed in tests | Removed `runningInConsole()` guard | `auth()->check()` already handles unauthenticated console/queue contexts; guard was causing tenant isolation to be bypassed in PHPUnit |
+| Bulk-classify route before `{vendor}` wildcard | `Route::post('/vendors/bulk-classify')` registered first | Prevents Laravel treating "bulk-classify" as a vendor ID |
+
+#### Udyam Verification Flow
+
+```
+POST /udyam/verify { udyam_number, vendor_id? }
+  → UdyamVerifierService::verify()
+     → If no API key:  UdyamVerificationResult::notConfigured()
+     → POST Surepass API (10s timeout)
+        → 404 / success=false:  notFound()
+        → 5xx:                  failed()
+        → 200 + success=true:   verified(enterpriseName, category, registeredAt)
+  → If verified AND vendor_id provided:
+     → VendorClassificationService::classify(vendor, category, source=api, verifiedAt=now)
+        → PropagateVendorClassification::dispatch(vendor)
+  → Return JSON result to Vue
+```
+
+#### Classification Propagation Flow
+
+```
+VendorClassificationService::classify(vendor, newCategory)
+  → vendor.category changed?
+      YES → Update vendor.category + verification_source in DB
+          → PropagateVendorClassification::dispatch(vendor)
+              → Chunk 200: UPDATE purchase_invoices SET vendor_category_snapshot = newCategory
+                           WHERE vendor_id = X AND status != 'paid'
+              → InvoiceRiskRecomputer::recomputeForVendor(vendor)
+                 → Chunk 200: recalculate disallowance_amount, interest_amount, status
+      NO  → Update other fields only (name, contact, etc.); no job dispatched
+```
+
+#### Files Created
+
+| File | Purpose |
+|---|---|
+| `app/DTOs/UdyamVerificationResult.php` | Immutable result DTO with 4 factory methods: `verified`, `notFound`, `notConfigured`, `failed` |
+| `app/Services/UdyamVerifierService.php` | Surepass API client with graceful degradation (10s timeout, all failures handled) |
+| `app/Services/VendorClassificationService.php` | Classifies one or many vendors; dispatches propagation job only on category change |
+| `app/Jobs/PropagateVendorClassification.php` | Async job: updates `vendor_category_snapshot` on invoices → recomputes risk (tries=3, timeout=120s) |
+| `app/Http/Requests/UpdateVendorRequest.php` | Validates name, category, GSTIN (regex + tenant-unique), Udyam, PAN, contact fields |
+| `app/Http/Requests/BulkClassifyRequest.php` | Validates vendor_ids (1–100) + category |
+| `app/Http/Controllers/VendorController.php` | index (search+filter+paginate), show, update, bulkClassify |
+| `app/Http/Controllers/UdyamVerificationController.php` | POST /udyam/verify → verify + optional auto-apply |
+| `resources/js/Pages/Vendors/Index.vue` | Vendor list: category filter chips, name/GSTIN search, bulk classify bar, tax exposure column |
+| `resources/js/Pages/Vendors/Show.vue` | Vendor detail: edit form, stat cards, recent invoices table, Udyam verify sidebar |
+| `database/factories/VendorFactory.php` | Vendor factory with states: micro, small, medium, large, unclassified, withGstin, withUdyam |
+
+#### Routes Added
+
+| Method | Path | Handler |
+|---|---|---|
+| POST | `/vendors/bulk-classify` | `VendorController@bulkClassify` |
+| GET | `/vendors` | `VendorController@index` |
+| GET | `/vendors/{vendor}` | `VendorController@show` |
+| PUT | `/vendors/{vendor}` | `VendorController@update` |
+| POST | `/udyam/verify` | `UdyamVerificationController@verify` |
+
+#### Configuration Added
+
+```env
+# .env — add your Surepass API key for Udyam verification
+SUREPASS_API_KEY=your_bearer_token_here
+```
+
+```php
+// config/services.php
+'surepass' => ['token' => env('SUREPASS_API_KEY')],
+```
+
+#### `InvoiceRiskRecomputer` Extended
+
+Added `recomputeForVendor(Vendor, ?Carbon): int` method — recomputes all non-paid invoices for a single vendor in chunks of 200. Used by `PropagateVendorClassification` job.
+
+#### `TenantScope` Bug Fix
+
+Removed the `! app()->runningInConsole()` guard from `TenantScope::apply()`. This guard incorrectly bypassed tenant isolation during PHPUnit tests (because PHPUnit is itself a console process). Since `auth()->check()` already returns `false` in unauthenticated console/queue contexts, the guard was redundant and harmful.
+
+#### Test Results
+
+```
+Tests:   159 total (all passing)
+         + 12 unit tests  (UdyamVerifierServiceTest — 100% path coverage)
+         + 18 feature tests (VendorControllerTest — CRUD, validation, propagation, bulk, tenant isolation)
+Passed:  159 / 159
+Assertions: 362
+Duration: ~4.2s (SQLite in-memory)
+```
+
+#### Test Coverage Highlights
+
+| Test | What it verifies |
+|---|---|
+| API key absent → notConfigured | No key in .env → graceful degradation |
+| 404 response → notFound | Udyam not in govt DB |
+| success=false → notFound | API returns success:false |
+| 500 response → failed | Server error → temporary failure |
+| Network error → failed | Connection refused/timeout |
+| Verified → Micro/Small/Medium category | Enterprise type mapping |
+| `show_returns_404_for_other_tenants_vendor` | TenantScope blocks cross-tenant access |
+| Category unchanged → no job dispatched | Idempotent classify |
+| Category changed → job dispatched | Propagation triggered |
+| Bulk > 100 vendors → validation error | Rate limiting on bulk ops |
+
+#### Known Limitations / Deferred
+
+| Item | Deferred to |
+|---|---|
+| LLM-based vendor name matching (Ollama/Qwen) | Phase 5+ |
+| Udyam verification rate limits / caching | Phase 9 (production hardening) |
+| Vendor merge / de-duplicate UI | Phase 8 |
+| Create vendor manually (without import) | Phase 5 |
 
 ---
 
