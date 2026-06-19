@@ -35,6 +35,20 @@ return [
         ],
     ],
 
+    // Razorpay — payment gateway for subscription billing
+    // Dashboard: https://dashboard.razorpay.com
+    'razorpay' => [
+        'key_id'         => env('RAZORPAY_KEY_ID'),
+        'key_secret'     => env('RAZORPAY_KEY_SECRET'),
+        'webhook_secret' => env('RAZORPAY_WEBHOOK_SECRET'),
+        // Plan IDs from Razorpay dashboard (₹1500/₹3000/₹4000 per month)
+        'plans' => [
+            'starter'      => env('RAZORPAY_PLAN_STARTER'),
+            'professional' => env('RAZORPAY_PLAN_PROFESSIONAL'),
+            'enterprise'   => env('RAZORPAY_PLAN_ENTERPRISE'),
+        ],
+    ],
+
     // Surepass — Udyam / MSME verification API (India)
     // Get your key at: https://surepass.io
     'surepass' => [

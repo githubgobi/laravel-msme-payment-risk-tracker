@@ -33,6 +33,10 @@ class Tenant extends Model
         'is_active',
         'created_by',
         'updated_by',
+        'razorpay_customer_id',
+        'razorpay_subscription_id',
+        'razorpay_plan_id',
+        'grace_period_ends_at',
     ];
 
     protected function casts(): array
@@ -45,6 +49,7 @@ class Tenant extends Model
             'rbi_bank_rate'         => 'decimal:2',
             'settings'              => 'array',
             'is_active'             => 'boolean',
+            'grace_period_ends_at'  => 'datetime',
         ];
     }
 

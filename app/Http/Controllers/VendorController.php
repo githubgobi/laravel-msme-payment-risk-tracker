@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Enums\VendorCategory;
 use App\Http\Requests\BulkClassifyRequest;
+use App\Http\Requests\CreateVendorRequest;
 use App\Http\Requests\UpdateVendorRequest;
 use App\Models\Vendor;
 use App\Services\VendorClassificationService;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -60,6 +62,41 @@ class VendorController extends Controller
                 'label' => $c->label(),
             ]),
         ]);
+    }
+
+    public function create(Request $request): Response
+    {
+        return Inertia::render('Vendors/Create', [
+            'categories' => collect(VendorCategory::cases())
+                ->filter(fn ($c) => $c !== VendorCategory::Unclassified)
+                ->values()
+                ->map(fn ($c) => ['value' => $c->value, 'label' => $c->label()]),
+        ]);
+    }
+
+    public function store(CreateVendorRequest $request): RedirectResponse
+    {
+        $data     = $request->validated();
+        $category = VendorCategory::from($data['category']);
+
+        $vendor = Vendor::create([
+            'tenant_id'     => $request->user()->tenant_id,
+            'name'          => $data['name'],
+            'category'      => $category,
+            'gstin'         => $data['gstin'] ?? null,
+            'pan'           => $data['pan'] ?? null,
+            'udyam_number'  => $data['udyam_number'] ?? null,
+            'contact_person' => $data['contact_name'] ?? null,
+            'email'         => $data['contact_email'] ?? null,
+            'phone'         => $data['contact_phone'] ?? null,
+            'address'       => $data['address'] ?? null,
+            'city'          => $data['city'] ?? null,
+            'state'         => $data['state'] ?? null,
+            'is_active'     => true,
+        ]);
+
+        return redirect()->route('vendors.show', $vendor)
+            ->with('success', "Vendor '{$vendor->name}' created successfully.");
     }
 
     public function show(Vendor $vendor): Response

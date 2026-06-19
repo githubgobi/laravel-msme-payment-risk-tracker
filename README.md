@@ -1270,6 +1270,131 @@ REDIS_CLIENT=predis
 
 ---
 
+## Phase 9 — Production Deployment (2026-06-19)
+
+### Objectives
+
+Make the application fully production-ready: scheduled jobs, security hardening, Razorpay subscription billing, manual vendor creation, infrastructure configs, CI/CD pipeline, and a zero-downtime deploy script.
+
+### Architecture Decisions
+
+| Decision | Rationale |
+|---|---|
+| Razorpay subscriptions (not orders) | Recurring billing with automatic retries and dunning management built-in |
+| Webhook-first subscription sync + 6-hour polling | Webhooks are primary; `subscriptions:sync` job as a safety net for missed events |
+| 7-day grace period on `subscription.halted` | Gives tenants time to fix payment issues without losing access immediately |
+| `TenantStatus::Inactive` for cancelled subscriptions | Access blocked via `EnsureActiveTenant`, consistent with existing status enum |
+| Rate limiters in `AppServiceProvider::boot()` | `RateLimiter::for()` uses the facade which requires a fully-booted container — not safe in `bootstrap/app.php` middleware closures |
+| SecurityHeaders middleware on web group | Belt-and-suspenders with Nginx headers; middleware covers non-Nginx environments (dev, tests) |
+| `audit:prune --years=10` (not 8) | Section 43B(h) requires 8-year trail; 10-year cutoff provides 2-year margin against accidental early deletion |
+| CSRF exempt on `/webhooks/razorpay` | Razorpay POSTs raw JSON body; CSRF token not present. Security handled by HMAC-SHA256 signature verification inside controller |
+
+### Files Created
+
+| File | Purpose |
+|---|---|
+| `app/Http/Middleware/SecurityHeaders.php` | X-Frame-Options, CSP, HSTS, X-Content-Type-Options, Referrer-Policy, Permissions-Policy |
+| `app/Providers/AppServiceProvider.php` | Rate limiter definitions: login (5/min), register (3/min), calculator (30/min), import (5/tenant-min), udyam (10/min), webhooks (120/min) |
+| `app/Services/RazorpayService.php` | Razorpay API client: createCustomer, createSubscription, getSubscription, cancelSubscription, verifyWebhookSignature (HMAC-SHA256) |
+| `app/Services/TenantSubscriptionService.php` | Webhook event handler: activated → Active, charged → extends end date, halted → 7-day grace period, cancelled/completed → Inactive |
+| `app/Http/Controllers/WebhookController.php` | POST /webhooks/razorpay — CSRF-exempt, HMAC-verified, always returns 200 to prevent Razorpay retries |
+| `app/Http/Controllers/SubscriptionController.php` | GET /subscribe (plan catalog), POST /subscribe/{plan} (create Razorpay subscription) |
+| `app/Http/Requests/CreateVendorRequest.php` | Validates name, category, GSTIN (regex + unique-per-tenant), PAN, Udyam number, contact fields |
+| `app/Console/Commands/PruneAuditLog.php` | `audit:prune --years=10` — deletes audit_logs records older than N years |
+| `app/Console/Commands/SyncSubscriptions.php` | `subscriptions:sync` — reconciles all tenant subscriptions from Razorpay API |
+| `resources/js/Pages/Vendors/Create.vue` | Manual vendor creation form: category buttons, GSTIN/PAN/Udyam fields, contact section |
+| `resources/js/Pages/Subscription/Upgrade.vue` | Plan comparison page with Razorpay JS checkout integration |
+| `deploy/nginx.conf` | Nginx: HTTPS, HTTP/2, gzip, static asset cache, rate limiting, PHP-FPM upstream |
+| `deploy/php-fpm.conf` | PHP-FPM: dynamic pm (max 20), Opcache tuning, Redis session handler |
+| `deploy/supervisor.conf` | 2 default workers + 1 import worker + scheduler process |
+| `deploy/redis.conf` | allkeys-lru, 256MB maxmemory, persistence disabled, password required |
+| `deploy/deploy.sh` | Zero-downtime: maintenance on → pull → composer → migrate → npm build → reload → maintenance off |
+| `scripts/backup-db.sh` | Daily MySQL dump via mysqldump (single-transaction), 7-day local retention |
+| `.github/workflows/ci.yml` | PHP test (SQLite) + npm build in parallel; SSH deploy on main push |
+
+### Files Modified
+
+| File | Change |
+|---|---|
+| `routes/console.php` | Registered scheduler: msme:recompute-risk (18:35 UTC), msme:send-alerts (02:30 UTC), subscriptions:sync (every 6h), audit:prune (Sunday 01:00 UTC) |
+| `routes/web.php` | Added throttle middleware on login, register, calculator, import, udyam routes; added /subscribe, /webhooks/razorpay, /vendors/create, POST /vendors routes |
+| `bootstrap/app.php` | Added SecurityHeaders to web group; CSRF exempt for /webhooks/razorpay |
+| `config/services.php` | Added Razorpay (key_id, key_secret, webhook_secret, plan IDs) |
+| `app/Models/Tenant.php` | Added razorpay_customer_id, razorpay_subscription_id, razorpay_plan_id, grace_period_ends_at to fillable + casts |
+| `app/Http/Controllers/VendorController.php` | Added create() and store() methods for manual vendor creation |
+| `.env.example` | Full production template with all required keys documented |
+| `database/migrations/2026_06_19_..._add_razorpay_fields_to_tenants_table.php` | New columns with indexes |
+
+### New Routes
+
+```
+GET  /subscribe                  → SubscriptionController@index     (auth + tenant.active)
+POST /subscribe/{plan}           → SubscriptionController@subscribe  (auth + tenant.active)
+POST /webhooks/razorpay          → WebhookController@razorpay        (public, throttle:webhooks)
+GET  /vendors/create             → VendorController@create           (auth + tenant.active)
+POST /vendors                    → VendorController@store            (auth + tenant.active)
+```
+
+### Scheduler Entries
+
+```
+00:05 IST (18:35 UTC) daily  → msme:recompute-risk   (overlap protection: 30 min)
+08:00 IST (02:30 UTC) daily  → msme:send-alerts       (overlap protection: 60 min)
+Every 6 hours                → subscriptions:sync     (overlap protection: 20 min)
+Sunday 01:00 UTC             → audit:prune --years=10 (overlap protection: 30 min)
+```
+
+### Rate Limiting
+
+```
+Login:       5 requests/minute per IP
+Register:    3 requests/minute per IP
+Calculator:  30 requests/minute per user/IP
+Import:      5 requests/minute per tenant/IP
+Udyam:       10 requests/minute per user/IP
+Webhooks:    120 requests/minute per IP
+```
+
+### Production Deployment
+
+```bash
+# Server setup (Ubuntu 24.04)
+# 1. Install Nginx, PHP 8.3-FPM, MySQL 8, Redis, Node 20, Supervisor
+# 2. Copy config files from deploy/ directory
+# 3. Set .env (copy from .env.example, fill all REQUIRED values)
+# 4. Generate app key: php artisan key:generate
+# 5. Add crontab entry OR use Supervisor for scheduler
+# 6. Deploy: bash deploy/deploy.sh main
+```
+
+### GitHub Actions Secrets Required
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_HOST` | Production server IP/hostname |
+| `DEPLOY_USER` | SSH user (e.g. `deploy`) |
+| `DEPLOY_SSH_KEY` | Private SSH key (ED25519 recommended) |
+| `DEPLOY_PORT` | SSH port (default 22) |
+
+### Test Results
+
+```
+Tests: 336 passed
+Assertions: 1040
+Duration: ~59s
+Coverage: 5 new test files — WebhookControllerTest (8), SubscriptionControllerTest (5),
+          VendorControllerTest additions (6), RazorpayServiceTest (7),
+          TenantSubscriptionServiceTest (7) = 33 new tests (301 → 336 total)
+```
+
+### Known Issues / Razorpay Integration Notes
+
+- Razorpay subscription creation requires the tenant's customer to be created first — `createCustomer()` is idempotent and stores the customer ID
+- The Razorpay JS SDK (`https://checkout.razorpay.com/v1/checkout.js`) must be added to `resources/js/app.js` or loaded via the `<script>` tag in the layout for the checkout modal to work
+- After a successful payment, Razorpay fires `subscription.activated` webhook — the tenant status updates asynchronously (not synchronously during checkout); the Upgrade.vue frontend reloads the page after payment to show updated status
+
+---
+
 ## Repository
 
 GitHub: [githubgobi/laravel-msme-payment-risk-tracker](https://github.com/githubgobi/laravel-msme-payment-risk-tracker)

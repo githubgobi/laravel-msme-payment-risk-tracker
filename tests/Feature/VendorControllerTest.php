@@ -360,4 +360,95 @@ class VendorControllerTest extends TestCase
         // Job should NOT be dispatched since category didn't change
         Bus::assertNotDispatched(PropagateVendorClassification::class);
     }
+
+    // ─── Create (manual vendor entry) ────────────────────────────────────────
+
+    #[Test]
+    public function create_page_renders_with_categories(): void
+    {
+        $this->actingAs($this->user)
+            ->get(route('vendors.create'))
+            ->assertInertia(fn ($page) => $page
+                ->component('Vendors/Create')
+                ->has('categories')
+            );
+    }
+
+    #[Test]
+    public function store_creates_vendor_and_redirects_to_show(): void
+    {
+        $this->actingAs($this->user)
+            ->post(route('vendors.store'), [
+                'name'     => 'Rajan Enterprises',
+                'category' => 'micro',
+                'gstin'    => '27AABCU9603R1ZX',
+            ])
+            ->assertRedirect();
+
+        $this->assertDatabaseHas('vendors', [
+            'name'      => 'Rajan Enterprises',
+            'category'  => 'micro',
+            'tenant_id' => $this->tenant->id,
+        ]);
+    }
+
+    #[Test]
+    public function store_requires_name_and_category(): void
+    {
+        $this->actingAs($this->user)
+            ->post(route('vendors.store'), [])
+            ->assertSessionHasErrors(['name', 'category']);
+    }
+
+    #[Test]
+    public function store_rejects_invalid_gstin(): void
+    {
+        $this->actingAs($this->user)
+            ->post(route('vendors.store'), [
+                'name'     => 'Rajan Enterprises',
+                'category' => 'micro',
+                'gstin'    => 'INVALID',
+            ])
+            ->assertSessionHasErrors('gstin');
+    }
+
+    #[Test]
+    public function store_rejects_duplicate_gstin_within_tenant(): void
+    {
+        Vendor::create([
+            'tenant_id' => $this->tenant->id,
+            'name'      => 'Existing Vendor',
+            'category'  => 'micro',
+            'gstin'     => '27AABCU9603R1ZX',
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($this->user)
+            ->post(route('vendors.store'), [
+                'name'     => 'New Vendor',
+                'category' => 'small',
+                'gstin'    => '27AABCU9603R1ZX', // duplicate
+            ])
+            ->assertSessionHasErrors('gstin');
+    }
+
+    #[Test]
+    public function store_blocked_for_viewer_role(): void
+    {
+        $viewer = User::create([
+            'name'      => 'Viewer User',
+            'email'     => 'viewer@test.com',
+            'password'  => bcrypt('password'),
+            'role'      => UserRole::Viewer->value,
+            'tenant_id' => $this->tenant->id,
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($viewer)
+            ->post(route('vendors.store'), [
+                'name'     => 'Rajan Enterprises',
+                'category' => 'micro',
+            ])
+            ->assertForbidden();
+    }
 }

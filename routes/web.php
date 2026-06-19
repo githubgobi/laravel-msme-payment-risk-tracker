@@ -9,8 +9,10 @@ use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\RegisterController;
 use App\Http\Controllers\Settings\ProfileController;
 use App\Http\Controllers\Settings\TeamController;
+use App\Http\Controllers\SubscriptionController;
 use App\Http\Controllers\UdyamVerificationController;
 use App\Http\Controllers\VendorController;
+use App\Http\Controllers\WebhookController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -20,10 +22,15 @@ Route::get('/', function () {
     return Auth::check() ? redirect('/dashboard') : redirect('/login');
 });
 
+// Razorpay webhook — public (no auth, no CSRF); HMAC-verified inside controller
+Route::post('/webhooks/razorpay', [WebhookController::class, 'razorpay'])
+    ->name('webhooks.razorpay')
+    ->middleware('throttle:webhooks');
+
 // Auth routes (Laravel built-in session auth)
 // Public registration
 Route::get('/register',  [RegisterController::class, 'show'])->name('register')->middleware('guest');
-Route::post('/register', [RegisterController::class, 'store'])->middleware('guest');
+Route::post('/register', [RegisterController::class, 'store'])->middleware(['guest', 'throttle:register']);
 
 Route::get('/login', function () {
     return Inertia::render('Auth/Login');
@@ -42,7 +49,7 @@ Route::post('/login', function (\Illuminate\Http\Request $request) {
     }
 
     return back()->withErrors(['email' => 'Invalid credentials.'])->onlyInput('email');
-})->middleware('guest');
+})->middleware(['guest', 'throttle:login']);
 
 Route::post('/logout', function (\Illuminate\Http\Request $request) {
     Auth::logout();
@@ -55,15 +62,16 @@ Route::post('/logout', function (\Illuminate\Http\Request $request) {
 Route::middleware(['auth', 'tenant.active'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
-    // Placeholder routes for nav links — controllers added in later phases
-    // Vendor routes (bulk-classify must come before {vendor} wildcard)
+    // Vendor routes (static paths must come before {vendor} wildcard)
     Route::post('/vendors/bulk-classify',       [VendorController::class, 'bulkClassify'])->name('vendors.bulk-classify');
+    Route::get('/vendors/create',               [VendorController::class, 'create'])->name('vendors.create');
+    Route::post('/vendors',                     [VendorController::class, 'store'])->name('vendors.store');
     Route::get('/vendors',                      [VendorController::class, 'index'])->name('vendors.index');
     Route::get('/vendors/{vendor}',             [VendorController::class, 'show'])->name('vendors.show');
     Route::put('/vendors/{vendor}',             [VendorController::class, 'update'])->name('vendors.update');
 
     // Udyam API verification
-    Route::post('/udyam/verify',                [UdyamVerificationController::class, 'verify'])->name('udyam.verify');
+    Route::post('/udyam/verify',                [UdyamVerificationController::class, 'verify'])->name('udyam.verify')->middleware('throttle:udyam');
     // Invoice routes
     Route::get('/invoices',                              [InvoiceController::class, 'index'])->name('invoices.index');
     Route::get('/invoices/{invoice}',                    [InvoiceController::class, 'show'])->name('invoices.show');
@@ -75,8 +83,8 @@ Route::middleware(['auth', 'tenant.active'])->group(function () {
     Route::delete('/invoices/{invoice}/payments/{payment}',        [PaymentController::class, 'destroy'])->name('invoices.payments.destroy');
 
     // Calculator
-    Route::get('/calculator',         [CalculatorController::class, 'index'])->name('calculator.index');
-    Route::post('/calculator/compute', [CalculatorController::class, 'compute'])->name('calculator.compute');
+    Route::get('/calculator',          [CalculatorController::class, 'index'])->name('calculator.index');
+    Route::post('/calculator/compute', [CalculatorController::class, 'compute'])->name('calculator.compute')->middleware('throttle:calculator');
 
     // Alert routes (settings must come before any future {alert} wildcard)
     Route::get('/alerts',             [AlertController::class, 'index'])->name('alerts.index');
@@ -84,9 +92,13 @@ Route::middleware(['auth', 'tenant.active'])->group(function () {
 
     // Import routes
     Route::get('/import',                       [ImportController::class, 'index'])->name('import.index');
-    Route::post('/import',                      [ImportController::class, 'store'])->name('import.store');
+    Route::post('/import',                      [ImportController::class, 'store'])->name('import.store')->middleware('throttle:import');
     Route::get('/import/{batch}',               [ImportController::class, 'show'])->name('import.show');
     Route::get('/import/sample/{type}',         [ImportController::class, 'downloadSample'])->name('import.sample');
+
+    // Subscription / billing
+    Route::get('/subscribe',                [SubscriptionController::class, 'index'])->name('subscription.index');
+    Route::post('/subscribe/{plan}',        [SubscriptionController::class, 'subscribe'])->name('subscription.subscribe');
 
     // Settings routes
     Route::get('/settings',                [ProfileController::class, 'index'])->name('settings.index');
