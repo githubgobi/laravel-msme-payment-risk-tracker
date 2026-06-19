@@ -64,9 +64,22 @@
                 </div>
 
                 <div class="flex items-center gap-4">
+                    <!-- Trial countdown badge -->
+                    <span
+                        v-if="$page.props.auth.user?.tenant?.is_trial"
+                        :class="[
+                            'hidden sm:block text-xs font-semibold px-3 py-1 rounded-full',
+                            $page.props.auth.user.tenant.trial_days_remaining <= 3
+                                ? 'bg-red-100 text-red-700'
+                                : 'bg-yellow-100 text-yellow-700'
+                        ]"
+                    >
+                        Trial: {{ $page.props.auth.user.tenant.trial_days_remaining }}d left
+                    </span>
+
                     <!-- Tenant name -->
                     <span
-                        v-if="$page.props.auth.user?.tenant"
+                        v-else-if="$page.props.auth.user?.tenant"
                         class="hidden sm:block text-xs font-medium text-gray-500 bg-gray-100 px-3 py-1 rounded-full"
                     >
                         {{ $page.props.auth.user.tenant.name }}
@@ -135,6 +148,7 @@ import {
     ChevronLeftIcon,
     ChevronRightIcon,
     ArrowRightOnRectangleIcon,
+    Cog6ToothIcon,
 } from '@heroicons/vue/24/outline';
 import NavItem from '@/Components/NavItem.vue';
 import FlashMessage from '@/Components/FlashMessage.vue';
@@ -171,5 +185,6 @@ const navigation = [
     { label: 'Import',     href: '/import',            icon: ArrowUpTrayIcon },
     { label: 'Alerts',     href: '/alerts',            icon: BellIcon },
     { label: 'Calculator', href: '/calculator',        icon: CalculatorIcon },
+    { label: 'Settings',   href: '/settings',          icon: Cog6ToothIcon },
 ];
 </script>

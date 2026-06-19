@@ -13,11 +13,12 @@ final class RowImportResult
         public readonly int    $rowNumber,
         public readonly string $invoiceNumber,
         public readonly string $message,
+        public readonly bool   $vendorCreated = false,
     ) {}
 
-    public static function imported(int $row, string $invoiceNumber): self
+    public static function imported(int $row, string $invoiceNumber, bool $vendorCreated = false): self
     {
-        return new self(self::STATUS_IMPORTED, $row, $invoiceNumber, 'Imported successfully');
+        return new self(self::STATUS_IMPORTED, $row, $invoiceNumber, 'Imported successfully', $vendorCreated);
     }
 
     public static function skipped(int $row, string $invoiceNumber, string $reason): self

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\TenantPlan;
 use App\Enums\TenantStatus;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -80,6 +81,33 @@ class Tenant extends Model
     public function isAccessible(): bool
     {
         return $this->subscription_status->isAccessible();
+    }
+
+    /**
+     * True only when the tenant should have active access:
+     *  - Active subscription (with optional end-date check)
+     *  - Trial that has NOT expired yet
+     */
+    public function hasActiveAccess(): bool
+    {
+        if (! $this->is_active) {
+            return false;
+        }
+
+        return match($this->subscription_status) {
+            TenantStatus::Active => ! $this->subscription_ends_at || $this->subscription_ends_at->isFuture(),
+            TenantStatus::Trial  => $this->trial_ends_at && $this->trial_ends_at->isFuture(),
+            default              => false,
+        };
+    }
+
+    public function trialDaysRemaining(): int
+    {
+        if ($this->subscription_status !== TenantStatus::Trial || ! $this->trial_ends_at) {
+            return 0;
+        }
+
+        return max(0, (int) Carbon::now()->diffInDays($this->trial_ends_at, false));
     }
 
     public function effectiveInterestRate(): float

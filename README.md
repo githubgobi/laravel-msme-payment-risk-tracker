@@ -972,7 +972,120 @@ Key scenarios covered:
 
 ---
 
-### Phase 7 — Multi-Tenancy & Billing *(Planned)*
+### Phase 7 — Multi-Tenancy & Billing ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Enable self-serve tenant registration (14-day free trial), enforce plan-based vendor/user limits, protect all authenticated routes from expired or suspended accounts, and give tenants a full settings UI to manage their business profile and team.
+
+#### Architecture Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| Self-registration creates trial tenant | `TenantRegistrationService` in DB::transaction | Atomic — never leave a Tenant without an Owner or an orphaned User |
+| Plan limits enforced in service layer | `PlanLimitService` — not in middleware | Controllers can return informative errors (not 403/502 blobs) |
+| Vendor count tracked locally in import | Count once at start, increment via `$vendor->wasRecentlyCreated` | Avoids N+1 DB queries during large imports |
+| `EnsureActiveTenant` renders Inertia page | HTTP 402 + `Auth/Suspended` page | User sees a meaningful upgrade message, not a blank error |
+| `hasActiveAccess()` checks both status AND expiry | Separate `trial_ends_at` and `subscription_ends_at` timestamps | Subscription can be Active but expired (common billing edge case) |
+| Settings in two controllers | `ProfileController` + `TeamController` under `Settings/` namespace | Single Responsibility — profile and team have different validation, authorization, and side effects |
+| Owner cannot deactivate themselves | `destroy()` guard in `TeamController` | Prevents account lockout — at least one active owner is always guaranteed |
+| Trial countdown in topbar | Shows badge in `AppLayout.vue` when `is_trial=true` | Persistent visibility; turns red at ≤3 days |
+
+#### Plan Limits
+
+| Plan | Vendors | Users | Price |
+|---|---|---|---|
+| Starter | 50 | 5 | ₹1,500/mo |
+| Growth | 200 | 15 | ₹3,000/mo |
+| CA Firm | Unlimited | Unlimited | ₹4,000/mo |
+
+#### Registration Flow
+
+```
+GET /register → Auth/Register.vue (guest only)
+POST /register { business_name, name, email, password, phone?, gstin? }
+  → RegisterTenantRequest::validate()
+  → TenantRegistrationService::register()
+     DB::transaction {
+       Tenant::create(plan=starter, status=trial, trial_ends_at=+14d, rbi_bank_rate=6.75)
+       User::create(tenant_id, role=owner)
+     }
+  → Auth::login(user)
+  → Redirect /dashboard with flash 'welcome'
+```
+
+#### Suspended Account Flow
+
+```
+Any auth route → EnsureActiveTenant middleware
+  → Super-admin (no tenant_id) → pass through
+  → $tenant->hasActiveAccess()
+      Active + subscription_ends_at in future → pass through
+      Trial + trial_ends_at in future → pass through
+      Any other case → Inertia::render('Auth/Suspended') HTTP 402
+```
+
+#### Files Created / Modified
+
+| File | Purpose |
+|---|---|
+| `app/Enums/TenantPlan.php` | Added `maxUsers(): int` method |
+| `app/Models/Tenant.php` | Added `hasActiveAccess()` + `trialDaysRemaining()` |
+| `app/Http/Middleware/HandleInertiaRequests.php` | Extended tenant shared props with `is_trial`, `trial_days_remaining`, `trial_ends_at`, `max_vendors` |
+| `app/Http/Requests/RegisterTenantRequest.php` | Validates business_name, name, email (unique:users), password (confirmed), phone (E.164), gstin (regex + unique:tenants) |
+| `app/Services/TenantRegistrationService.php` | DB::transaction creates Tenant → User (Owner) |
+| `app/Http/Controllers/RegisterController.php` | `show()` + `store()` — redirects to dashboard on success |
+| `app/Services/PlanLimitService.php` | `canAddVendor()`, `canAddUser()`, `currentVendorCount()`, `currentUserCount()`, `vendorLimitMessage()`, `userLimitMessage()` |
+| `app/Services/Import/VendorMatcher.php` | Added `$canCreate = true` parameter to `findOrCreate()` — throws RuntimeException when `$canCreate=false` |
+| `app/DTOs/RowImportResult.php` | Added `bool $vendorCreated = false` property; updated `imported()` factory |
+| `app/Services/Import/ImportPipeline.php` | Injects `PlanLimitService`; tracks vendor count locally; passes `$canCreateVendor` per row |
+| `app/Http/Middleware/EnsureActiveTenant.php` | Checks `hasActiveAccess()`; renders `Auth/Suspended` with reason/plan/trial_ends_at |
+| `bootstrap/app.php` | Registers `tenant.active` middleware alias |
+| `app/Http/Requests/Settings/UpdateProfileRequest.php` | Validates all tenant profile fields; GSTIN unique ignoring own tenant |
+| `app/Http/Requests/Settings/StoreTeamUserRequest.php` | Validates name, email (unique:users), role, password |
+| `app/Http/Requests/Settings/UpdateTeamUserRequest.php` | Validates role (sometimes) and is_active (sometimes) |
+| `app/Http/Controllers/Settings/ProfileController.php` | `index()` returns profile + billing + team + limits; `update()` saves tenant fields |
+| `app/Http/Controllers/Settings/TeamController.php` | `store()` checks plan limit; `update()` same-tenant check; `destroy()` deactivates (cannot self-deactivate) |
+| `routes/web.php` | Added `/register` (guest), `tenant.active` middleware on auth group, settings routes |
+| `resources/js/Pages/Auth/Register.vue` | Registration form: business name, name, email, password, phone, GSTIN; "14-day trial" benefits panel |
+| `resources/js/Pages/Auth/Suspended.vue` | Standalone page (no sidebar): trial_expired / subscription_expired / account_suspended with plan pricing + upgrade CTA |
+| `resources/js/Pages/Settings/Index.vue` | Three-tab settings: Profile (business info + RBI rate), Team (user list + add member form + deactivate), Billing (plan info + usage bars + plan comparison) |
+| `resources/js/Layouts/AppLayout.vue` | Added Settings nav item (Cog6ToothIcon); added trial countdown badge in topbar (yellow/red by urgency) |
+| `tests/Feature/RegisterControllerTest.php` | 11 tests: registration, trial start, auto-login, GSTIN optional, validation |
+| `tests/Unit/Services/PlanLimitServiceTest.php` | 12 tests: Starter/Growth/CaFirm limits, soft-delete exclusion, inactive user exclusion |
+| `tests/Feature/Settings/ProfileControllerTest.php` | 11 tests: rendering, limit props, canManage per role, update, GSTIN unique, cross-tenant isolation |
+| `tests/Feature/Settings/TeamControllerTest.php` | 10 tests: add member, plan limit block, role-gate, deactivate, self-deactivate guard, cross-tenant |
+
+#### Routes Added
+
+| Method | Path | Middleware | Handler |
+|---|---|---|---|
+| GET | `/register` | guest | `RegisterController@show` |
+| POST | `/register` | guest | `RegisterController@store` |
+| GET | `/settings` | auth, tenant.active | `ProfileController@index` |
+| PUT | `/settings/profile` | auth, tenant.active | `ProfileController@update` |
+| POST | `/settings/team` | auth, tenant.active | `TeamController@store` |
+| PUT | `/settings/team/{user}` | auth, tenant.active | `TeamController@update` |
+| DELETE | `/settings/team/{user}` | auth, tenant.active | `TeamController@destroy` |
+
+#### Test Results
+
+```
+Phase 7 tests: 44 new tests
+Full suite:    247 tests / 247 passing / 791 assertions
+Duration:      ~7.8s (SQLite in-memory)
+```
+
+#### Known Limitations / Deferred
+
+| Item | Deferred to |
+|---|---|
+| Razorpay / Stripe payment integration | Phase 9 |
+| Subscription webhook handling (renewal, cancellation) | Phase 9 |
+| YearEndSummary manual send UI | Phase 8 |
+| CA Firm multi-client management UI | Phase 8 |
+| Per-user alert preferences | Phase 8 |
 
 ---
 

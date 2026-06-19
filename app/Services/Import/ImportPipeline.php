@@ -11,6 +11,7 @@ use App\Models\ImportBatch;
 use App\Models\PurchaseInvoice;
 use App\Services\InvoiceRiskRecomputer;
 use App\Services\MsmeDeadlineEngine;
+use App\Services\PlanLimitService;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Log;
@@ -43,6 +44,7 @@ final class ImportPipeline
         private readonly VendorMatcher        $vendorMatcher,
         private readonly MsmeDeadlineEngine   $engine,
         private readonly InvoiceRiskRecomputer $riskRecomputer,
+        private readonly PlanLimitService      $planLimits,
     ) {}
 
     /**
@@ -71,10 +73,14 @@ final class ImportPipeline
 
         $this->vendorMatcher->resetCache();
 
-        $tenant   = $batch->tenant;
-        $bankRate = (float) ($tenant->rbi_bank_rate ?? MsmeDeadlineEngine::DEFAULT_RBI_BANK_RATE);
-        $errors   = [];
-        $rowCount = 0;
+        $tenant      = $batch->tenant;
+        $bankRate    = (float) ($tenant->rbi_bank_rate ?? MsmeDeadlineEngine::DEFAULT_RBI_BANK_RATE);
+        $errors      = [];
+        $rowCount    = 0;
+
+        // Plan limit tracking — count once at start, increment as new vendors are created
+        $vendorLimit      = $tenant->plan->maxVendors();
+        $vendorCount      = $this->planLimits->currentVendorCount($tenant);
 
         // Reload from DB to ensure fresh counts
         $processedRows = 0;
@@ -83,7 +89,13 @@ final class ImportPipeline
 
         foreach ($rows as $row) {
             /** @var ImportRow $row */
-            $result = $this->processRow($row, $batch, $bankRate);
+            $canCreateVendor = ($vendorLimit === PHP_INT_MAX) || ($vendorCount < $vendorLimit);
+            $result = $this->processRow($row, $batch, $bankRate, $canCreateVendor);
+
+            // If a new vendor was created in this row, increment the local count
+            if ($result->status === RowImportResult::STATUS_IMPORTED && $result->vendorCreated) {
+                $vendorCount++;
+            }
 
             match ($result->status) {
                 RowImportResult::STATUS_IMPORTED => $processedRows++,
@@ -128,7 +140,7 @@ final class ImportPipeline
         ]);
     }
 
-    private function processRow(ImportRow $row, ImportBatch $batch, float $bankRate): RowImportResult
+    private function processRow(ImportRow $row, ImportBatch $batch, float $bankRate, bool $canCreateVendor = true): RowImportResult
     {
         // 1. Validate
         $validationErrors = $this->rowValidator->validate($row);
@@ -146,7 +158,7 @@ final class ImportPipeline
         $paidAmount      = $this->rowValidator->parseAmount($row->paidAmount) ?? 0.0;
         $agreementExists = $this->rowValidator->parseAgreementExists($row->agreementExists);
 
-        // 3. Find or create vendor
+        // 3. Find or create vendor (plan limit enforced via $canCreateVendor)
         try {
             $vendor = $this->vendorMatcher->findOrCreate(
                 vendorName:  $row->vendorName,
@@ -154,6 +166,7 @@ final class ImportPipeline
                 createdBy:   $batch->created_by,
                 gstin:       $row->gstin,
                 udyamNumber: $row->udyamNumber,
+                canCreate:   $canCreateVendor,
             );
         } catch (Throwable $e) {
             return RowImportResult::failed(
@@ -217,7 +230,7 @@ final class ImportPipeline
             ]);
         }
 
-        return RowImportResult::imported($row->rowNumber, $row->invoiceNumber);
+        return RowImportResult::imported($row->rowNumber, $row->invoiceNumber, $vendor->wasRecentlyCreated);
     }
 
     private function parseFile(ImportBatch $batch): \Illuminate\Support\Collection

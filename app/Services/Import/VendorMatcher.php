@@ -30,12 +30,16 @@ final class VendorMatcher
      * @param  int       $tenantId
      * @param  int|null  $createdBy  Batch creator user ID
      */
+    /**
+     * @throws \RuntimeException when vendor not found and $canCreate is false (plan limit reached)
+     */
     public function findOrCreate(
         string   $vendorName,
         int      $tenantId,
         ?int     $createdBy,
         string   $gstin       = '',
         string   $udyamNumber = '',
+        bool     $canCreate   = true,
     ): Vendor {
         $gstin       = strtoupper(trim($gstin));
         $udyamNumber = strtoupper(trim($udyamNumber));
@@ -97,6 +101,12 @@ final class VendorMatcher
         }
 
         // 4. Create new vendor — category unclassified until Phase 4 classifies it
+        if (! $canCreate) {
+            throw new \RuntimeException(
+                "Vendor '{$vendorName}' not found and your plan's vendor limit has been reached."
+            );
+        }
+
         $vendor = Vendor::withoutGlobalScopes()->create([
             'tenant_id'           => $tenantId,
             'name'                => $vendorName,

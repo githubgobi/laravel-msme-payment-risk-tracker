@@ -3,6 +3,9 @@
 use App\Http\Controllers\AlertController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ImportController;
+use App\Http\Controllers\RegisterController;
+use App\Http\Controllers\Settings\ProfileController;
+use App\Http\Controllers\Settings\TeamController;
 use App\Http\Controllers\UdyamVerificationController;
 use App\Http\Controllers\VendorController;
 use Illuminate\Support\Facades\Auth;
@@ -15,6 +18,10 @@ Route::get('/', function () {
 });
 
 // Auth routes (Laravel built-in session auth)
+// Public registration
+Route::get('/register',  [RegisterController::class, 'show'])->name('register')->middleware('guest');
+Route::post('/register', [RegisterController::class, 'store'])->middleware('guest');
+
 Route::get('/login', function () {
     return Inertia::render('Auth/Login');
 })->name('login')->middleware('guest');
@@ -41,8 +48,8 @@ Route::post('/logout', function (\Illuminate\Http\Request $request) {
     return redirect('/login');
 })->name('logout')->middleware('auth');
 
-// Authenticated routes
-Route::middleware('auth')->group(function () {
+// Authenticated + active-tenant routes
+Route::middleware(['auth', 'tenant.active'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     // Placeholder routes for nav links — controllers added in later phases
@@ -67,4 +74,11 @@ Route::middleware('auth')->group(function () {
     Route::post('/import',                      [ImportController::class, 'store'])->name('import.store');
     Route::get('/import/{batch}',               [ImportController::class, 'show'])->name('import.show');
     Route::get('/import/sample/{type}',         [ImportController::class, 'downloadSample'])->name('import.sample');
+
+    // Settings routes
+    Route::get('/settings',                [ProfileController::class, 'index'])->name('settings.index');
+    Route::put('/settings/profile',        [ProfileController::class, 'update'])->name('settings.profile');
+    Route::post('/settings/team',          [TeamController::class, 'store'])->name('settings.team.store');
+    Route::put('/settings/team/{user}',    [TeamController::class, 'update'])->name('settings.team.update');
+    Route::delete('/settings/team/{user}', [TeamController::class, 'destroy'])->name('settings.team.destroy');
 });

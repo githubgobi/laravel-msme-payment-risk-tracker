@@ -35,6 +35,15 @@ enum TenantPlan: string
         };
     }
 
+    public function maxUsers(): int
+    {
+        return match($this) {
+            self::Starter => 5,
+            self::Growth  => 15,
+            self::CaFirm  => PHP_INT_MAX,
+        };
+    }
+
     public function maxClientBusinesses(): int
     {
         return match($this) {
