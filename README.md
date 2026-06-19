@@ -1214,11 +1214,241 @@ Frontend: npm run build ✓ (no errors; ApexCharts chunk warning is expected)
 
 ---
 
-### Phase 9 — Deployment *(see detailed section below)*
+### Phase 9 — Production Deployment ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Make the application fully production-ready: scheduled jobs, security hardening, Razorpay subscription billing, manual vendor creation, infrastructure configs, CI/CD pipeline, and a zero-downtime deploy script.
+
+#### Architecture Decisions
+
+| Decision | Rationale |
+|---|---|
+| Razorpay subscriptions (not orders) | Recurring billing with automatic retries and dunning management built-in |
+| Webhook-first subscription sync + 6-hour polling | Webhooks are primary; `subscriptions:sync` job as a safety net for missed events |
+| 7-day grace period on `subscription.halted` | Gives tenants time to fix payment issues without losing access immediately |
+| `TenantStatus::Inactive` for cancelled subscriptions | Access blocked via `EnsureActiveTenant`, consistent with existing status enum |
+| Rate limiters in `AppServiceProvider::boot()` | `RateLimiter::for()` uses the facade which requires a fully-booted container — not safe in `bootstrap/app.php` middleware closures |
+| SecurityHeaders middleware on web group | Belt-and-suspenders with Nginx headers; middleware covers non-Nginx environments (dev, tests) |
+| `audit:prune --years=10` (not 8) | Section 43B(h) requires 8-year trail; 10-year cutoff provides 2-year margin against accidental early deletion |
+| CSRF exempt on `/webhooks/razorpay` | Razorpay POSTs raw JSON body; CSRF token not present. Security handled by HMAC-SHA256 signature verification inside controller |
+
+#### Files Created
+
+| File | Purpose |
+|---|---|
+| `app/Http/Middleware/SecurityHeaders.php` | X-Frame-Options, CSP, HSTS, X-Content-Type-Options, Referrer-Policy, Permissions-Policy |
+| `app/Providers/AppServiceProvider.php` | Rate limiter definitions: login (5/min), register (3/min), calculator (30/min), import (5/tenant-min), udyam (10/min), webhooks (120/min) |
+| `app/Services/RazorpayService.php` | Razorpay API client: createCustomer, createSubscription, getSubscription, cancelSubscription, verifyWebhookSignature (HMAC-SHA256) |
+| `app/Services/TenantSubscriptionService.php` | Webhook event handler: activated → Active, charged → extends end date, halted → 7-day grace period, cancelled/completed → Inactive |
+| `app/Http/Controllers/WebhookController.php` | POST /webhooks/razorpay — CSRF-exempt, HMAC-verified, always returns 200 to prevent Razorpay retries |
+| `app/Http/Controllers/SubscriptionController.php` | GET /subscribe (plan catalog), POST /subscribe/{plan} (create Razorpay subscription) |
+| `app/Http/Requests/CreateVendorRequest.php` | Validates name, category, GSTIN (regex + unique-per-tenant), PAN, Udyam number, contact fields |
+| `app/Console/Commands/PruneAuditLog.php` | `audit:prune --years=10` — deletes audit_logs records older than N years |
+| `app/Console/Commands/SyncSubscriptions.php` | `subscriptions:sync` — reconciles all tenant subscriptions from Razorpay API |
+| `resources/js/Pages/Vendors/Create.vue` | Manual vendor creation form: category buttons, GSTIN/PAN/Udyam fields, contact section |
+| `resources/js/Pages/Subscription/Upgrade.vue` | Plan comparison page with Razorpay JS checkout integration |
+| `deploy/nginx.conf` | Nginx: HTTPS, HTTP/2, gzip, static asset cache, rate limiting, PHP-FPM upstream |
+| `deploy/php-fpm.conf` | PHP-FPM: dynamic pm (max 20), Opcache tuning, Redis session handler |
+| `deploy/supervisor.conf` | 2 default workers + 1 import worker + scheduler process |
+| `deploy/redis.conf` | allkeys-lru, 256MB maxmemory, persistence disabled, password required |
+| `deploy/deploy.sh` | Zero-downtime: maintenance on → pull → composer → migrate → npm build → reload → maintenance off |
+| `scripts/backup-db.sh` | Daily MySQL dump via mysqldump (single-transaction), 7-day local retention |
+| `.github/workflows/ci.yml` | PHP test (SQLite) + npm build in parallel; SSH deploy on main push |
+
+#### Files Modified
+
+| File | Change |
+|---|---|
+| `routes/console.php` | Registered scheduler: msme:recompute-risk (18:35 UTC), msme:send-alerts (02:30 UTC), subscriptions:sync (every 6h), audit:prune (Sunday 01:00 UTC) |
+| `routes/web.php` | Added throttle middleware on login, register, calculator, import, udyam routes; added /subscribe, /webhooks/razorpay, /vendors/create, POST /vendors routes |
+| `bootstrap/app.php` | Added SecurityHeaders to web group; CSRF exempt for /webhooks/razorpay |
+| `config/services.php` | Added Razorpay (key_id, key_secret, webhook_secret, plan IDs) |
+| `app/Models/Tenant.php` | Added razorpay_customer_id, razorpay_subscription_id, razorpay_plan_id, grace_period_ends_at to fillable + casts |
+| `app/Http/Controllers/VendorController.php` | Added create() and store() methods for manual vendor creation |
+| `.env.example` | Full production template with all required keys documented |
+| `database/migrations/2026_06_19_..._add_razorpay_fields_to_tenants_table.php` | New columns with indexes |
+
+#### New Routes
+
+```
+GET  /subscribe                  → SubscriptionController@index     (auth + tenant.active)
+POST /subscribe/{plan}           → SubscriptionController@subscribe  (auth + tenant.active)
+POST /webhooks/razorpay          → WebhookController@razorpay        (public, throttle:webhooks)
+GET  /vendors/create             → VendorController@create           (auth + tenant.active)
+POST /vendors                    → VendorController@store            (auth + tenant.active)
+```
+
+#### Scheduler Entries
+
+```
+00:05 IST (18:35 UTC) daily  → msme:recompute-risk   (overlap protection: 30 min)
+08:00 IST (02:30 UTC) daily  → msme:send-alerts       (overlap protection: 60 min)
+Every 6 hours                → subscriptions:sync     (overlap protection: 20 min)
+Sunday 01:00 UTC             → audit:prune --years=10 (overlap protection: 30 min)
+```
+
+#### Rate Limiting
+
+```
+Login:       5 requests/minute per IP
+Register:    3 requests/minute per IP
+Calculator:  30 requests/minute per user/IP
+Import:      5 requests/minute per tenant/IP
+Udyam:       10 requests/minute per user/IP
+Webhooks:    120 requests/minute per IP
+```
+
+#### Production Deployment
+
+```bash
+# Server setup (Ubuntu 24.04)
+# 1. Install Nginx, PHP 8.3-FPM, MySQL 8, Redis, Node 20, Supervisor
+# 2. Copy config files from deploy/ directory
+# 3. Set .env (copy from .env.example, fill all REQUIRED values)
+# 4. Generate app key: php artisan key:generate
+# 5. Add crontab entry OR use Supervisor for scheduler
+# 6. Deploy: bash deploy/deploy.sh main
+```
+
+#### GitHub Actions Secrets Required
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_HOST` | Production server IP/hostname |
+| `DEPLOY_USER` | SSH user (e.g. `deploy`) |
+| `DEPLOY_SSH_KEY` | Private SSH key (ED25519 recommended) |
+| `DEPLOY_PORT` | SSH port (default 22) |
+
+#### Test Results
+
+```
+Tests: 336 passed
+Assertions: 1040
+Duration: ~59s
+Coverage: 5 new test files — WebhookControllerTest (8), SubscriptionControllerTest (5),
+          VendorControllerTest additions (6), RazorpayServiceTest (7),
+          TenantSubscriptionServiceTest (7) = 33 new tests (301 → 336 total)
+```
+
+#### Known Issues / Razorpay Integration Notes
+
+- Razorpay subscription creation requires the tenant's customer to be created first — `createCustomer()` is idempotent and stores the customer ID
+- The Razorpay JS SDK must be loaded via `<script>` tag in the layout for the checkout modal to work
+- After a successful payment, Razorpay fires `subscription.activated` webhook — the tenant status updates asynchronously; the Upgrade.vue frontend reloads the page after payment to show updated status
 
 ---
 
-### Phase 10 — Client Delivery & Onboarding *(see detailed section below)*
+### Phase 10 — Client Delivery & Onboarding ✅
+
+**Completed:** 2026-06-19
+
+#### Objectives
+Complete the customer-facing delivery layer: Filament super-admin panel for tenant and user management, a guided onboarding wizard for new tenants, CA-grade annual 43B(h) disallowance reports (PDF + Excel), admin impersonation, and all supporting tests.
+
+#### Architecture Decisions
+
+| Decision | Rationale |
+|---|---|
+| `onboarding_completed_at` timestamp on Tenant | Single nullable field — `null` means incomplete, any timestamp means done. Simple, queryable, auditable. |
+| `EnsureOnboardingComplete` middleware | Applied only to the main `auth + tenant.active + onboarding` group; exempt routes (onboarding itself, impersonate, logout) listed as named-route exceptions to prevent redirect loops |
+| DomPDF for PDF generation | `barryvdh/laravel-dompdf` — well-maintained, Laravel-native, handles INR ₹ symbol via UTF-8 DejaVu font |
+| Maatwebsite/Excel for Excel export | Already installed (`^3.1`); `VendorExposureExport` uses `FromCollection + WithHeadings + WithMapping + ShouldAutoSize` |
+| `ReportService::annualSummary()` is pure | Takes a Tenant + FY year; returns a plain array. Controller and export class both consume the same data — no duplication |
+| Interest computed on `amount - paid_amount` | `outstanding_amount` is not a DB column; derived at read time to stay in sync with payments |
+| Impersonation uses session key `impersonating_admin_id` | Original admin ID stored in session, `Auth::login($owner)` switches user, `/impersonate/leave` restores. No additional package required |
+| Filament `navigationIcon` type must be `string\|BackedEnum\|null` | Filament v5 parent class declares the exact type; PHP 8.3 requires child property types to match exactly — `?string` causes a fatal error |
+| `TenantFactory` defaults `onboarding_completed_at = now()` | All existing tests assume onboarding is complete; factory provides an `->onboarding()` state for tests that specifically test the onboarding flow |
+
+#### Files Created
+
+| File | Purpose |
+|---|---|
+| `database/migrations/2026_06_19_160212_add_onboarding_completed_at_to_tenants_table.php` | Adds nullable `onboarding_completed_at` timestamp to `tenants` |
+| `app/Filament/Resources/TenantResource.php` | Super-admin Filament resource: list all tenants, edit, suspend/activate/impersonate actions |
+| `app/Filament/Resources/TenantResource/Pages/ListTenants.php` | Filament list page for TenantResource |
+| `app/Filament/Resources/TenantResource/Pages/EditTenant.php` | Filament edit page for TenantResource |
+| `app/Filament/Resources/UserResource.php` | Super-admin read-only user list across all tenants |
+| `app/Filament/Resources/UserResource/Pages/ListUsers.php` | Filament list page for UserResource |
+| `app/Filament/Widgets/AdminOverviewWidget.php` | StatsOverviewWidget: MRR, active tenants, trial tenants, churned this month |
+| `app/Http/Middleware/EnsureOnboardingComplete.php` | Redirects to `/onboarding` when tenant `onboarding_completed_at IS NULL`; exempt for super-admins and named routes |
+| `app/Http/Controllers/OnboardingController.php` | GET /onboarding (checklist), POST /onboarding/complete (sets timestamp) |
+| `resources/js/Pages/Onboarding/Index.vue` | 5-step checklist with progress bar; POST to complete when all steps done |
+| `app/Http/Controllers/ImpersonateController.php` | POST /admin/impersonate/{tenant} stores admin ID in session + logs in as owner; GET /impersonate/leave restores admin |
+| `app/Services/ReportService.php` | `annualSummary(tenant, year)` — aggregates invoices, outstanding amounts, disallowance, interest at 3× RBI bank rate compounded monthly |
+| `app/Exports/VendorExposureExport.php` | Maatwebsite Excel export: vendor-wise 43B(h) exposure with auto-sized columns and header styling |
+| `app/Http/Controllers/ReportController.php` | GET /reports (index), GET /reports/{fy}/pdf (DomPDF download), GET /reports/{fy}/excel (Excel download) |
+| `resources/views/reports/annual-summary.blade.php` | CA-grade PDF template: summary tiles, vendor detail table, legal disclaimer, company header |
+| `resources/js/Pages/Reports/Index.vue` | Year selector with PDF + Excel download buttons for last 5 financial years |
+| `tests/Feature/OnboardingControllerTest.php` | 7 tests: page accessible, guest redirect, complete sets timestamp, complete requires auth, middleware redirects unfinished tenant, completed tenant passes through, steps structure |
+| `tests/Feature/ReportControllerTest.php` | 8 tests: index renders, guest redirect, PDF content type, Excel content type, PDF filename, Excel filename, invalid FY → 404, tenant isolation |
+| `tests/Unit/Services/ReportServiceTest.php` | 8 tests: structure, overdue → disallowance, paid → no disallowance, out-of-FY excluded, interest = 0 for non-overdue, interest > 0 for overdue, interest = 0 when fully paid, vendor rows aggregate correctly |
+
+#### Files Modified
+
+| File | Change |
+|---|---|
+| `app/Models/Tenant.php` | Added `onboarding_completed_at` to fillable + casts as datetime; added `hasCompletedOnboarding()` helper |
+| `app/Providers/Filament/AdminPanelProvider.php` | Registered `AdminOverviewWidget` in widgets array |
+| `bootstrap/app.php` | Added `'onboarding' => EnsureOnboardingComplete::class` middleware alias |
+| `routes/web.php` | Added onboarding, impersonation, and report routes; main auth group now applies `onboarding` middleware |
+| `database/factories/TenantFactory.php` | Default `onboarding_completed_at = now()`; added `->onboarding()` state (null) |
+| All 15 feature test setUp() files | Added `'onboarding_completed_at' => now()` to `Tenant::create()` calls so existing tests pass with the new middleware |
+
+#### New Routes
+
+```
+GET  /onboarding                   → OnboardingController@index    (auth)
+POST /onboarding/complete          → OnboardingController@complete  (auth)
+POST /admin/impersonate/{tenant}   → ImpersonateController@start    (auth, super-admin only)
+GET  /impersonate/leave            → ImpersonateController@leave     (auth)
+GET  /reports                      → ReportController@index          (auth + tenant.active + onboarding)
+GET  /reports/{fy}/pdf             → ReportController@pdf            (auth + tenant.active + onboarding)
+GET  /reports/{fy}/excel           → ReportController@excel          (auth + tenant.active + onboarding)
+```
+
+#### Onboarding Checklist Steps
+
+| # | Key | Done When |
+|---|---|---|
+| 1 | `profile` | `gstin` and `state` both non-empty |
+| 2 | `vendors` | At least 1 vendor exists |
+| 3 | `invoices` | At least 1 purchase invoice exists |
+| 4 | `alerts` | `settings.alert_enabled` is truthy |
+| 5 | `team` | Tenant has more than 1 user |
+
+#### Admin Dashboard (Filament /admin)
+
+| Widget / Resource | What it shows |
+|---|---|
+| AdminOverviewWidget | MRR (₹), Active tenants, Total tenants, Churned this month |
+| TenantResource | All tenants; searchable/filterable; suspend/activate/impersonate table actions |
+| UserResource | All users across all tenants; read-only; shows tenant name, role, last login |
+
+#### Dependency Added
+
+| Package | Version | Purpose |
+|---|---|---|
+| `barryvdh/laravel-dompdf` | ^3.1 | PDF generation for annual 43B(h) reports |
+
+#### Test Results
+
+```
+Phase 10 new tests: 23
+Full suite: 359 tests / 359 passing / 1112 assertions
+Duration: ~32s (SQLite in-memory)
+Frontend: npm run build ✓
+```
+
+#### Known Limitations / Deferred
+
+| Item | Notes |
+|---|---|
+| Nested impersonation blocked | Correct — second impersonate attempt returns 403 |
+| PDF ₹ symbol requires UTF-8 DomPDF config | Set `pdf.options.defaultFont` to `dejavusans` in config/dompdf.php if ₹ renders as ? |
+| AdminOverviewWidget MRR is plan price × active tenants | Does not deduct prorated cancellations; accurate for trend, not ARR |
+| Onboarding steps are hardcoded in PHP | Easily extendable via `OnboardingController::buildChecklist()` |
 
 ---
 
@@ -1268,199 +1498,6 @@ QUEUE_CONNECTION=database
 REDIS_CLIENT=predis
 ```
 
----
-
-## Phase 9 — Production Deployment (2026-06-19)
-
-### Objectives
-
-Make the application fully production-ready: scheduled jobs, security hardening, Razorpay subscription billing, manual vendor creation, infrastructure configs, CI/CD pipeline, and a zero-downtime deploy script.
-
-### Architecture Decisions
-
-| Decision | Rationale |
-|---|---|
-| Razorpay subscriptions (not orders) | Recurring billing with automatic retries and dunning management built-in |
-| Webhook-first subscription sync + 6-hour polling | Webhooks are primary; `subscriptions:sync` job as a safety net for missed events |
-| 7-day grace period on `subscription.halted` | Gives tenants time to fix payment issues without losing access immediately |
-| `TenantStatus::Inactive` for cancelled subscriptions | Access blocked via `EnsureActiveTenant`, consistent with existing status enum |
-| Rate limiters in `AppServiceProvider::boot()` | `RateLimiter::for()` uses the facade which requires a fully-booted container — not safe in `bootstrap/app.php` middleware closures |
-| SecurityHeaders middleware on web group | Belt-and-suspenders with Nginx headers; middleware covers non-Nginx environments (dev, tests) |
-| `audit:prune --years=10` (not 8) | Section 43B(h) requires 8-year trail; 10-year cutoff provides 2-year margin against accidental early deletion |
-| CSRF exempt on `/webhooks/razorpay` | Razorpay POSTs raw JSON body; CSRF token not present. Security handled by HMAC-SHA256 signature verification inside controller |
-
-### Files Created
-
-| File | Purpose |
-|---|---|
-| `app/Http/Middleware/SecurityHeaders.php` | X-Frame-Options, CSP, HSTS, X-Content-Type-Options, Referrer-Policy, Permissions-Policy |
-| `app/Providers/AppServiceProvider.php` | Rate limiter definitions: login (5/min), register (3/min), calculator (30/min), import (5/tenant-min), udyam (10/min), webhooks (120/min) |
-| `app/Services/RazorpayService.php` | Razorpay API client: createCustomer, createSubscription, getSubscription, cancelSubscription, verifyWebhookSignature (HMAC-SHA256) |
-| `app/Services/TenantSubscriptionService.php` | Webhook event handler: activated → Active, charged → extends end date, halted → 7-day grace period, cancelled/completed → Inactive |
-| `app/Http/Controllers/WebhookController.php` | POST /webhooks/razorpay — CSRF-exempt, HMAC-verified, always returns 200 to prevent Razorpay retries |
-| `app/Http/Controllers/SubscriptionController.php` | GET /subscribe (plan catalog), POST /subscribe/{plan} (create Razorpay subscription) |
-| `app/Http/Requests/CreateVendorRequest.php` | Validates name, category, GSTIN (regex + unique-per-tenant), PAN, Udyam number, contact fields |
-| `app/Console/Commands/PruneAuditLog.php` | `audit:prune --years=10` — deletes audit_logs records older than N years |
-| `app/Console/Commands/SyncSubscriptions.php` | `subscriptions:sync` — reconciles all tenant subscriptions from Razorpay API |
-| `resources/js/Pages/Vendors/Create.vue` | Manual vendor creation form: category buttons, GSTIN/PAN/Udyam fields, contact section |
-| `resources/js/Pages/Subscription/Upgrade.vue` | Plan comparison page with Razorpay JS checkout integration |
-| `deploy/nginx.conf` | Nginx: HTTPS, HTTP/2, gzip, static asset cache, rate limiting, PHP-FPM upstream |
-| `deploy/php-fpm.conf` | PHP-FPM: dynamic pm (max 20), Opcache tuning, Redis session handler |
-| `deploy/supervisor.conf` | 2 default workers + 1 import worker + scheduler process |
-| `deploy/redis.conf` | allkeys-lru, 256MB maxmemory, persistence disabled, password required |
-| `deploy/deploy.sh` | Zero-downtime: maintenance on → pull → composer → migrate → npm build → reload → maintenance off |
-| `scripts/backup-db.sh` | Daily MySQL dump via mysqldump (single-transaction), 7-day local retention |
-| `.github/workflows/ci.yml` | PHP test (SQLite) + npm build in parallel; SSH deploy on main push |
-
-### Files Modified
-
-| File | Change |
-|---|---|
-| `routes/console.php` | Registered scheduler: msme:recompute-risk (18:35 UTC), msme:send-alerts (02:30 UTC), subscriptions:sync (every 6h), audit:prune (Sunday 01:00 UTC) |
-| `routes/web.php` | Added throttle middleware on login, register, calculator, import, udyam routes; added /subscribe, /webhooks/razorpay, /vendors/create, POST /vendors routes |
-| `bootstrap/app.php` | Added SecurityHeaders to web group; CSRF exempt for /webhooks/razorpay |
-| `config/services.php` | Added Razorpay (key_id, key_secret, webhook_secret, plan IDs) |
-| `app/Models/Tenant.php` | Added razorpay_customer_id, razorpay_subscription_id, razorpay_plan_id, grace_period_ends_at to fillable + casts |
-| `app/Http/Controllers/VendorController.php` | Added create() and store() methods for manual vendor creation |
-| `.env.example` | Full production template with all required keys documented |
-| `database/migrations/2026_06_19_..._add_razorpay_fields_to_tenants_table.php` | New columns with indexes |
-
-### New Routes
-
-```
-GET  /subscribe                  → SubscriptionController@index     (auth + tenant.active)
-POST /subscribe/{plan}           → SubscriptionController@subscribe  (auth + tenant.active)
-POST /webhooks/razorpay          → WebhookController@razorpay        (public, throttle:webhooks)
-GET  /vendors/create             → VendorController@create           (auth + tenant.active)
-POST /vendors                    → VendorController@store            (auth + tenant.active)
-```
-
-### Scheduler Entries
-
-```
-00:05 IST (18:35 UTC) daily  → msme:recompute-risk   (overlap protection: 30 min)
-08:00 IST (02:30 UTC) daily  → msme:send-alerts       (overlap protection: 60 min)
-Every 6 hours                → subscriptions:sync     (overlap protection: 20 min)
-Sunday 01:00 UTC             → audit:prune --years=10 (overlap protection: 30 min)
-```
-
-### Rate Limiting
-
-```
-Login:       5 requests/minute per IP
-Register:    3 requests/minute per IP
-Calculator:  30 requests/minute per user/IP
-Import:      5 requests/minute per tenant/IP
-Udyam:       10 requests/minute per user/IP
-Webhooks:    120 requests/minute per IP
-```
-
-### Production Deployment
-
-```bash
-# Server setup (Ubuntu 24.04)
-# 1. Install Nginx, PHP 8.3-FPM, MySQL 8, Redis, Node 20, Supervisor
-# 2. Copy config files from deploy/ directory
-# 3. Set .env (copy from .env.example, fill all REQUIRED values)
-# 4. Generate app key: php artisan key:generate
-# 5. Add crontab entry OR use Supervisor for scheduler
-# 6. Deploy: bash deploy/deploy.sh main
-```
-
-### GitHub Actions Secrets Required
-
-| Secret | Value |
-|---|---|
-| `DEPLOY_HOST` | Production server IP/hostname |
-| `DEPLOY_USER` | SSH user (e.g. `deploy`) |
-| `DEPLOY_SSH_KEY` | Private SSH key (ED25519 recommended) |
-| `DEPLOY_PORT` | SSH port (default 22) |
-
-### Test Results
-
-```
-Tests: 336 passed
-Assertions: 1040
-Duration: ~59s
-Coverage: 5 new test files — WebhookControllerTest (8), SubscriptionControllerTest (5),
-          VendorControllerTest additions (6), RazorpayServiceTest (7),
-          TenantSubscriptionServiceTest (7) = 33 new tests (301 → 336 total)
-```
-
-### Known Issues / Razorpay Integration Notes
-
-- Razorpay subscription creation requires the tenant's customer to be created first — `createCustomer()` is idempotent and stores the customer ID
-- The Razorpay JS SDK (`https://checkout.razorpay.com/v1/checkout.js`) must be added to `resources/js/app.js` or loaded via the `<script>` tag in the layout for the checkout modal to work
-- After a successful payment, Razorpay fires `subscription.activated` webhook — the tenant status updates asynchronously (not synchronously during checkout); the Upgrade.vue frontend reloads the page after payment to show updated status
-
----
-
-## Phase 10 — Client Delivery & Onboarding (2026-06-19)
-
-### Objectives
-
-Complete the customer-facing delivery layer: Filament super-admin panel for tenant and user management, a guided onboarding wizard for new tenants, CA-grade annual 43B(h) disallowance reports (PDF + Excel), admin impersonation, and all supporting tests.
-
-### Architecture Decisions
-
-| Decision | Rationale |
-|---|---|
-| `onboarding_completed_at` timestamp on Tenant | Single nullable field — `null` means incomplete, any timestamp means done. Simple, queryable, auditable. |
-| `EnsureOnboardingComplete` middleware | Applied only to the main `auth + tenant.active + onboarding` group; exempt routes (onboarding itself, impersonate, logout) are listed as named-route exceptions to prevent redirect loops |
-| DomPDF for PDF generation | `barryvdh/laravel-dompdf` — well-maintained, Laravel-native, handles INR ₹ symbol via UTF-8 DejaVu font |
-| Maatwebsite/Excel for Excel export | Already installed (`^3.1`); `VendorExposureExport` uses `FromCollection + WithHeadings + WithMapping + ShouldAutoSize` |
-| `ReportService::annualSummary()` is pure | Takes a Tenant + FY year; returns a plain array. Controller and export class both consume the same data — no duplication |
-| Interest computed on `outstanding_amount = amount - paid_amount` | `outstanding_amount` is not a DB column; derived at read time to stay in sync with payments |
-| Impersonation uses session key `impersonating_admin_id` | Standard pattern — original admin ID is stored in session, `Auth::login($owner)` switches user, `/impersonate/leave` restores. No additional package required |
-| Filament `navigationIcon` type must be `string\|BackedEnum\|null` | Filament v5 parent class declares the exact type; PHP 8.3 requires child property types to match exactly — `?string` causes a fatal error |
-| `TenantFactory` defaults `onboarding_completed_at = now()` | All existing tests assume onboarding is complete; factory provides an `->onboarding()` state for tests that specifically test the onboarding flow |
-
-### Files Created
-
-| File | Purpose |
-|---|---|
-| `database/migrations/2026_06_19_160212_add_onboarding_completed_at_to_tenants_table.php` | Adds nullable `onboarding_completed_at` timestamp to `tenants` |
-| `app/Filament/Resources/TenantResource.php` | Super-admin Filament resource: list all tenants, edit, suspend/activate/impersonate actions |
-| `app/Filament/Resources/TenantResource/Pages/ListTenants.php` | Filament list page for TenantResource |
-| `app/Filament/Resources/TenantResource/Pages/EditTenant.php` | Filament edit page for TenantResource |
-| `app/Filament/Resources/UserResource.php` | Super-admin read-only user list across all tenants |
-| `app/Filament/Resources/UserResource/Pages/ListUsers.php` | Filament list page for UserResource |
-| `app/Filament/Widgets/AdminOverviewWidget.php` | StatsOverviewWidget: MRR, active tenants, trial tenants, churned this month |
-| `app/Http/Middleware/EnsureOnboardingComplete.php` | Redirects to `/onboarding` when tenant `onboarding_completed_at IS NULL`; exempt for super-admins and named routes |
-| `app/Http/Controllers/OnboardingController.php` | GET /onboarding (checklist), POST /onboarding/complete (sets timestamp) |
-| `resources/js/Pages/Onboarding/Index.vue` | 5-step checklist with progress bar; POST to complete when all steps done |
-| `app/Http/Controllers/ImpersonateController.php` | POST /admin/impersonate/{tenant} (stores admin ID in session, logs in as owner), GET /impersonate/leave (restores admin) |
-| `app/Services/ReportService.php` | `annualSummary(tenant, year)` — aggregates invoices, outstanding amounts, disallowance, interest at 3× RBI bank rate compounded monthly |
-| `app/Exports/VendorExposureExport.php` | Maatwebsite Excel export: vendor-wise 43B(h) exposure with auto-sized columns and header styling |
-| `app/Http/Controllers/ReportController.php` | GET /reports (index), GET /reports/{fy}/pdf (DomPDF download), GET /reports/{fy}/excel (Excel download) |
-| `resources/views/reports/annual-summary.blade.php` | CA-grade PDF template: summary tiles, vendor detail table, legal disclaimer, company header |
-| `resources/js/Pages/Reports/Index.vue` | Year selector with PDF + Excel download buttons for last 5 financial years |
-| `tests/Feature/OnboardingControllerTest.php` | 7 tests: page accessible, guest redirect, complete sets timestamp, complete requires auth, middleware redirects unfinished tenant, completed tenant passes through, steps structure |
-| `tests/Feature/ReportControllerTest.php` | 8 tests: index renders, guest redirect, PDF content type, Excel content type, PDF filename, Excel filename, invalid FY → 404, tenant isolation |
-| `tests/Unit/Services/ReportServiceTest.php` | 8 tests: structure, overdue → disallowance, paid → no disallowance, out-of-FY invoice excluded, interest = 0 for non-overdue, interest > 0 for overdue, interest = 0 when fully paid, vendor rows aggregate correctly |
-
-### Files Modified
-
-| File | Change |
-|---|---|
-| `app/Models/Tenant.php` | Added `onboarding_completed_at` to fillable + casts as datetime; added `hasCompletedOnboarding()` helper |
-| `app/Providers/Filament/AdminPanelProvider.php` | Registered `AdminOverviewWidget` in widgets array |
-| `bootstrap/app.php` | Added `'onboarding' => EnsureOnboardingComplete::class` middleware alias |
-| `routes/web.php` | Added onboarding routes (GET /onboarding, POST /onboarding/complete), impersonation routes (POST /admin/impersonate/{tenant}, GET /impersonate/leave), report routes (GET /reports, GET /reports/{fy}/pdf, GET /reports/{fy}/excel); main auth group now applies `onboarding` middleware |
-| `database/factories/TenantFactory.php` | Default `onboarding_completed_at = now()`; added `->onboarding()` state (null) |
-| All 15 feature test setUp() files | Added `'onboarding_completed_at' => now()` to `Tenant::create()` calls so existing tests pass with the new middleware |
-
-### New Routes
-
-```
-GET  /onboarding                   → OnboardingController@index    (auth)
-POST /onboarding/complete          → OnboardingController@complete  (auth)
-POST /admin/impersonate/{tenant}   → ImpersonateController@start    (auth, super-admin only)
-GET  /impersonate/leave            → ImpersonateController@leave     (auth)
-GET  /reports                      → ReportController@index          (auth + tenant.active + onboarding)
-GET  /reports/{fy}/pdf             → ReportController@pdf            (auth + tenant.active + onboarding)
-GET  /reports/{fy}/excel           → ReportController@excel          (auth + tenant.active + onboarding)
-```
 
 ### Onboarding Checklist Steps
 
