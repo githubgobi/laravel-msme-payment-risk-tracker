@@ -1452,6 +1452,131 @@ Frontend: npm run build ✓
 
 ---
 
+### Phase 11 — Local LLM Integration ✅
+
+#### Objectives
+
+Integrate Ollama (local LLM) for two high-value automation tasks: (1) vendor name fuzzy matching during CSV/Tally XML import to prevent duplicate vendor records; (2) auto-classification of unclassified vendors using MSME Udyam turnover criteria. Both are confidence-gated — below threshold, results are suggestions only; a human confirms before changes persist.
+
+#### Architecture Decisions
+
+| Decision | Rationale |
+|---|---|
+| `LlmClient` contract interface | `OllamaClient` implements `LlmClient`; services type-hint the interface — testable via mock without touching HTTP, and swappable to another provider later |
+| `LLM_ENABLED=false` default | Zero performance impact when disabled; import pipeline and classify endpoints behave exactly as before Phase 11 |
+| LLM inserted as step 3.5 in `VendorMatcher` | Preserves existing match priority: GSTIN → Udyam → exact name → LLM fuzzy → create new |
+| JSON-format Ollama prompt (`"format":"json"`) | Structured output eliminates free-text parsing fragility; `temperature=0, seed=42` for deterministic responses |
+| Confidence threshold (default 80%) | Below threshold: result returned as suggestion, human confirms; above threshold: auto-applied in batch command |
+| `llm_confidence + llm_reasoning` columns on vendors | Full audit trail for every AI-generated classification — CA-grade traceability |
+| `VendorVerificationSource::Llm` (pre-existing enum case) | No enum migration needed; audit column was already designed for AI in Phase 4 |
+| `OllamaClient` stays `final` | Concrete infrastructure adapter — shouldn't be extended; `LlmClient` interface handles testability |
+| `VendorFuzzyMatcher`, `VendorCategoryClassifier` non-final | Need to be mockable in feature tests via Mockery; PHPUnit cannot mock final classes |
+
+#### Files Created
+
+| File | Purpose |
+|---|---|
+| `config/llm.php` | LLM_ENABLED, LLM_ENDPOINT, LLM_MODEL, LLM_TIMEOUT, LLM_CONFIDENCE_THRESHOLD, LLM_MAX_MATCH_CANDIDATES |
+| `app/Contracts/LlmClient.php` | Interface: generate(), isAvailable(), getModel(), getEndpoint() |
+| `app/Services/OllamaClient.php` | Implements LlmClient — Guzzle wrapper for `/api/generate` and `/api/tags`; silent on failure (returns null) |
+| `app/Services/Llm/VendorFuzzyMatcher.php` | Prompts LLM with imported name + up to 20 candidate vendors; returns LlmMatchResult or null |
+| `app/Services/Llm/VendorCategoryClassifier.php` | Prompts LLM with vendor name + GSTIN state code + state; returns LlmClassificationResult or null |
+| `app/DTOs/LlmMatchResult.php` | readonly DTO: vendorId, vendorName, confidence, reasoning |
+| `app/DTOs/LlmClassificationResult.php` | readonly DTO: category (VendorCategory), confidence, reasoning, autoApplied |
+| `app/Http/Controllers/LlmClassifyController.php` | review() — AI Review page; suggest() — single vendor suggestion; apply() — confirm suggestion; batch() — classify all unclassified; status() — Ollama health check |
+| `app/Console/Commands/AiClassifyVendors.php` | `ai:classify-vendors --tenant= --dry-run --force` — progress bar, table output, auto-applies above threshold |
+| `resources/js/Components/AiClassifyButton.vue` | "AI Suggest" button → spinner → result card with confidence badge → Confirm/Dismiss |
+| `resources/js/Pages/Vendors/AiReview.vue` | Grid of unclassified vendor cards with AiClassifyButton; "Classify All" triggers batch endpoint |
+| `database/migrations/2026_06_19_..._add_llm_fields_to_vendors_table.php` | `llm_confidence DECIMAL(4,3) NULL`, `llm_reasoning TEXT NULL` |
+| `tests/Unit/Services/OllamaClientTest.php` | 8 tests: generate success, HTTP error, connection error, isAvailable matching, JSON format sent |
+| `tests/Unit/Services/VendorFuzzyMatcherTest.php` | 8 tests: match found, null vendor_id, below threshold, client null, invalid JSON, unknown ID, empty candidates, custom threshold |
+| `tests/Unit/Services/VendorCategoryClassifierTest.php` | 8 tests: micro result, autoApplied false, client unavailable, invalid JSON, unknown category, unclassified rejected, large vendor, GSTIN in prompt |
+| `tests/Feature/LlmClassifyControllerTest.php` | 10 tests: review renders, LLM disabled 404, unclassified only list, suggest JSON, suggest 503, suggest 404 disabled, apply persists, apply validation, batch summary, status endpoint |
+
+#### Files Modified
+
+| File | Change |
+|---|---|
+| `app/Models/Vendor.php` | Added llm_confidence, llm_reasoning to fillable; float cast for llm_confidence |
+| `app/Services/Import/VendorMatcher.php` | Injected VendorFuzzyMatcher; added step 3.5 llmFuzzyMatch() between name-match and create |
+| `app/Providers/AppServiceProvider.php` | Singleton bindings for OllamaClient, LlmClient, VendorFuzzyMatcher, VendorCategoryClassifier, VendorMatcher |
+| `routes/web.php` | GET /vendors/ai-review, POST /vendors/ai-classify-batch (before {vendor} wildcard), POST /vendors/{vendor}/ai-classify, POST /vendors/{vendor}/ai-classify/apply, GET /ai/status |
+| `.env.example` | Added LLM_ENABLED, LLM_ENDPOINT, LLM_MODEL, LLM_TIMEOUT, LLM_CONFIDENCE_THRESHOLD, LLM_MAX_MATCH_CANDIDATES |
+
+#### New Routes
+
+```
+GET  /vendors/ai-review                       → LlmClassifyController@review   (auth + tenant.active + onboarding)
+POST /vendors/ai-classify-batch               → LlmClassifyController@batch    (auth + tenant.active + onboarding)
+POST /vendors/{vendor}/ai-classify            → LlmClassifyController@suggest  (auth + tenant.active + onboarding)
+POST /vendors/{vendor}/ai-classify/apply      → LlmClassifyController@apply    (auth + tenant.active + onboarding)
+GET  /ai/status                               → LlmClassifyController@status   (auth + tenant.active + onboarding)
+```
+
+#### Enabling Ollama Locally
+
+```bash
+# 1. Install Ollama: https://ollama.ai
+ollama pull qwen2.5:3b          # ~2 GB download
+
+# 2. Set env vars in .env
+LLM_ENABLED=true
+LLM_ENDPOINT=http://localhost:11434
+LLM_MODEL=qwen2.5:3b
+
+# 3. Classify all unclassified vendors (dry run first)
+php artisan ai:classify-vendors --dry-run
+php artisan ai:classify-vendors
+
+# 4. Or use the web UI: /vendors/ai-review
+```
+
+#### Artisan Command
+
+```
+php artisan ai:classify-vendors [--tenant=<id>] [--dry-run] [--force]
+
+Options:
+  --tenant=  Restrict to a single tenant (omit for all tenants)
+  --dry-run  Show predictions without persisting — safe for review
+  --force    Apply even below the confidence threshold (use with caution)
+```
+
+#### Prompt Design
+
+**Fuzzy Match prompt** sends:
+- Imported vendor name
+- Up to 20 existing vendor candidates with ID, name, GSTIN
+- Instructions to handle Pvt/Private, Ltd/Limited, abbreviation variants
+- Asks for `{"vendor_id": int|null, "confidence": float, "reasoning": string}`
+
+**Category Classification prompt** sends:
+- Vendor name, optional GSTIN (with state code), optional state
+- Udyam turnover thresholds (Micro ≤ ₹5cr, Small ≤ ₹50cr, Medium ≤ ₹250cr, Large > ₹250cr)
+- Conservative bias instruction: prefer Micro/Small when uncertain (safe for tax compliance)
+- Asks for `{"category": "micro|small|medium|large", "confidence": float, "reasoning": string}`
+
+#### Test Results
+
+```
+Tests:      393 passed (359 → 393, +34 new tests)
+Assertions: 1,196
+Duration:   ~43s (SQLite in-memory)
+Frontend:   npm run build ✓
+```
+
+#### Known Limitations
+
+| Item | Notes |
+|---|---|
+| LLM_ENABLED=false in .env.example | Intentional — Ollama must be installed and model pulled before enabling |
+| Fuzzy match candidate limit: 20 | Sending 100+ candidates degrades LLM accuracy and increases latency; 20 is optimal for 3b models |
+| First inference after cold start: 10-20 s | Ollama loads model into VRAM on first request; subsequent calls are fast (~1-3 s) |
+| Batch classification is synchronous | For tenants with 500+ vendors consider wrapping in a queued job |
+| Production server needs GPU or ARM CPU | `qwen2.5:3b` runs on CPU (~30s/inference) or GPU (~1s/inference); plan accordingly |
+
+---
+
 ## Local Development Setup
 
 ```bash

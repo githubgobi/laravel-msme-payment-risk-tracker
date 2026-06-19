@@ -4,6 +4,7 @@ use App\Http\Controllers\AlertController;
 use App\Http\Controllers\CalculatorController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ImpersonateController;
+use App\Http\Controllers\LlmClassifyController;
 use App\Http\Controllers\ImportController;
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\OnboardingController;
@@ -80,10 +81,14 @@ Route::middleware(['auth', 'tenant.active', 'onboarding'])->group(function () {
     // Vendor routes (static paths must come before {vendor} wildcard)
     Route::post('/vendors/bulk-classify',       [VendorController::class, 'bulkClassify'])->name('vendors.bulk-classify');
     Route::get('/vendors/create',               [VendorController::class, 'create'])->name('vendors.create');
+    Route::get('/vendors/ai-review',            [LlmClassifyController::class, 'review'])->name('vendors.ai-review');
+    Route::post('/vendors/ai-classify-batch',   [LlmClassifyController::class, 'batch'])->name('vendors.ai-classify.batch');
     Route::post('/vendors',                     [VendorController::class, 'store'])->name('vendors.store');
     Route::get('/vendors',                      [VendorController::class, 'index'])->name('vendors.index');
     Route::get('/vendors/{vendor}',             [VendorController::class, 'show'])->name('vendors.show');
     Route::put('/vendors/{vendor}',             [VendorController::class, 'update'])->name('vendors.update');
+    Route::post('/vendors/{vendor}/ai-classify',       [LlmClassifyController::class, 'suggest'])->name('vendors.ai-classify.suggest');
+    Route::post('/vendors/{vendor}/ai-classify/apply', [LlmClassifyController::class, 'apply'])->name('vendors.ai-classify.apply');
 
     // Udyam API verification
     Route::post('/udyam/verify',                [UdyamVerificationController::class, 'verify'])->name('udyam.verify')->middleware('throttle:udyam');
@@ -126,4 +131,7 @@ Route::middleware(['auth', 'tenant.active', 'onboarding'])->group(function () {
     Route::get('/reports',              [ReportController::class, 'index'])->name('reports.index');
     Route::get('/reports/{fy}/pdf',     [ReportController::class, 'pdf'])->name('reports.pdf')->where('fy', '[0-9]{4}');
     Route::get('/reports/{fy}/excel',   [ReportController::class, 'excel'])->name('reports.excel')->where('fy', '[0-9]{4}');
+
+    // AI status endpoint
+    Route::get('/ai/status', [LlmClassifyController::class, 'status'])->name('ai.status');
 });

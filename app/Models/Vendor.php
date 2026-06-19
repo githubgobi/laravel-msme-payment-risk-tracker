@@ -32,6 +32,8 @@ class Vendor extends Model
         'phone',
         'email',
         'notes',
+        'llm_confidence',
+        'llm_reasoning',
         'is_active',
         'created_by',
         'updated_by',
@@ -44,6 +46,7 @@ class Vendor extends Model
             'category'           => VendorCategory::class,
             'verification_source'=> VendorVerificationSource::class,
             'udyam_verified_at'  => 'datetime',
+            'llm_confidence'     => 'float',
             'is_active'          => 'boolean',
         ];
     }

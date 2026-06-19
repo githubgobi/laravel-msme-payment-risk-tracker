@@ -2,6 +2,11 @@
 
 namespace App\Providers;
 
+use App\Contracts\LlmClient;
+use App\Services\Import\VendorMatcher;
+use App\Services\Llm\VendorCategoryClassifier;
+use App\Services\Llm\VendorFuzzyMatcher;
+use App\Services\OllamaClient;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -11,7 +16,31 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        //
+        $this->app->singleton(OllamaClient::class, fn () => new OllamaClient(
+            endpoint: config('llm.endpoint'),
+            model:    config('llm.model'),
+            timeout:  config('llm.timeout'),
+        ));
+
+        // Bind the interface so controllers/services can resolve LlmClient directly
+        $this->app->bind(LlmClient::class, OllamaClient::class);
+
+        $this->app->singleton(VendorFuzzyMatcher::class, fn ($app) => new VendorFuzzyMatcher(
+            client:              $app->make(OllamaClient::class),
+            confidenceThreshold: config('llm.confidence_threshold'),
+            maxCandidates:       config('llm.max_match_candidates'),
+        ));
+
+        $this->app->singleton(VendorCategoryClassifier::class, fn ($app) => new VendorCategoryClassifier(
+            client:              $app->make(OllamaClient::class),
+            confidenceThreshold: config('llm.confidence_threshold'),
+        ));
+
+        // Override VendorMatcher binding to inject LLM matcher when enabled
+        $this->app->singleton(VendorMatcher::class, fn ($app) => new VendorMatcher(
+            fuzzyMatcher: config('llm.enabled') ? $app->make(VendorFuzzyMatcher::class) : null,
+            llmEnabled:   (bool) config('llm.enabled'),
+        ));
     }
 
     public function boot(): void

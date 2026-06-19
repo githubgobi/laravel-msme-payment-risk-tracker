@@ -2,9 +2,12 @@
 
 namespace App\Services\Import;
 
+use App\DTOs\LlmMatchResult;
 use App\Enums\VendorCategory;
 use App\Enums\VendorVerificationSource;
 use App\Models\Vendor;
+use App\Services\Llm\VendorFuzzyMatcher;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -14,6 +17,7 @@ use Illuminate\Support\Str;
  *   1. GSTIN (exact, case-insensitive)
  *   2. Udyam number (exact, case-insensitive)
  *   3. Vendor name (exact, trimmed, case-insensitive)
+ *   3.5 LLM fuzzy match (when LLM_ENABLED=true and exact matches all fail)
  *   4. Create new vendor with category = unclassified
  *
  * Maintains an in-memory cache for the duration of a single import
@@ -24,12 +28,11 @@ final class VendorMatcher
     /** @var array<string, Vendor> */
     private array $cache = [];
 
-    /**
-     * Find or create a vendor for the given import row data.
-     *
-     * @param  int       $tenantId
-     * @param  int|null  $createdBy  Batch creator user ID
-     */
+    public function __construct(
+        private readonly ?VendorFuzzyMatcher $fuzzyMatcher = null,
+        private readonly bool                $llmEnabled   = false,
+    ) {}
+
     /**
      * @throws \RuntimeException when vendor not found and $canCreate is false (plan limit reached)
      */
@@ -100,7 +103,16 @@ final class VendorMatcher
             return $vendor;
         }
 
-        // 4. Create new vendor — category unclassified until Phase 4 classifies it
+        // 3.5 LLM fuzzy match — only when enabled and at least 1 vendor exists in tenant
+        if ($this->llmEnabled && $this->fuzzyMatcher !== null) {
+            $matched = $this->llmFuzzyMatch($vendorName, $tenantId);
+            if ($matched) {
+                $this->cache[$cacheKey] = $matched;
+                return $matched;
+            }
+        }
+
+        // 4. Create new vendor — category unclassified until classified
         if (! $canCreate) {
             throw new \RuntimeException(
                 "Vendor '{$vendorName}' not found and your plan's vendor limit has been reached."
@@ -119,7 +131,6 @@ final class VendorMatcher
             'updated_by'          => $createdBy,
         ]);
 
-        // Cache under all available keys
         $this->cache["name:{$tenantId}:" . Str::lower($vendorName)] = $vendor;
         if ($gstin !== '') {
             $this->cache["gstin:{$tenantId}:{$gstin}"] = $vendor;
@@ -131,9 +142,52 @@ final class VendorMatcher
         return $vendor;
     }
 
-    /** Reset the in-memory cache (call between separate imports). */
     public function resetCache(): void
     {
         $this->cache = [];
+    }
+
+    private function llmFuzzyMatch(string $vendorName, int $tenantId): ?Vendor
+    {
+        $candidates = Vendor::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->whereNull('deleted_at')
+            ->select(['id', 'name', 'gstin', 'state'])
+            ->limit(20)
+            ->get()
+            ->map(fn ($v) => [
+                'id'    => $v->id,
+                'name'  => $v->name,
+                'gstin' => $v->gstin,
+                'state' => $v->state,
+            ])
+            ->toArray();
+
+        if (empty($candidates)) {
+            return null;
+        }
+
+        /** @var LlmMatchResult|null $result */
+        $result = $this->fuzzyMatcher->findBestMatch($vendorName, $candidates);
+
+        if ($result === null) {
+            return null;
+        }
+
+        $vendor = Vendor::withoutGlobalScopes()
+            ->where('id', $result->vendorId)
+            ->whereNull('deleted_at')
+            ->first();
+
+        if ($vendor) {
+            Log::info('VendorMatcher: LLM fuzzy match resolved', [
+                'imported_name' => $vendorName,
+                'matched_to'    => $vendor->name,
+                'confidence'    => $result->confidence,
+                'reasoning'     => $result->reasoning,
+            ]);
+        }
+
+        return $vendor;
     }
 }
