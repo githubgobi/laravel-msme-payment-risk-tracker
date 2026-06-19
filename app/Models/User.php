@@ -46,7 +46,21 @@ class User extends Authenticatable implements FilamentUser
 
     public function canAccessPanel(Panel $panel): bool
     {
-        return $this->is_active && $this->tenant?->isAccessible();
+        if (! $this->is_active) {
+            return false;
+        }
+
+        // Super-admin has no tenant — always allowed
+        if (is_null($this->tenant_id)) {
+            return true;
+        }
+
+        return $this->tenant?->isAccessible() ?? false;
+    }
+
+    public function isSuperAdmin(): bool
+    {
+        return is_null($this->tenant_id);
     }
 
     public function tenant(): BelongsTo
