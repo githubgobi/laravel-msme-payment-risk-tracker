@@ -6,6 +6,7 @@ import { createInertiaApp } from '@inertiajs/vue3';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import { createPinia } from 'pinia';
 import VueApexCharts from 'vue3-apexcharts';
+import { ZiggyVue } from 'ziggy-js';
 
 const appName = document.title;
 
@@ -25,6 +26,7 @@ createInertiaApp({
             .use(plugin)
             .use(pinia)
             .use(VueApexCharts)
+            .use(ZiggyVue)
             .mount(el);
     },
 
