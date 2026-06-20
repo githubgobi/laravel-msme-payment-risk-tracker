@@ -1,0 +1,14 @@
+.git
+.gitignore
+.gitattributes
+node_modules
+.env
+.env.*
+!.env.docker
+storage/logs/*.log
+.phpunit.cache
+coverage.xml
+tests/
+*.md
+.github/
+deploy/

@@ -1,0 +1,67 @@
+version: "3.9"
+
+services:
+
+  # ── Application (Nginx + PHP-FPM + Queue workers + Scheduler) ────────────
+  app:
+    build: .
+    container_name: msme-app
+    ports:
+      - "8000:80"
+    env_file: .env.docker
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      # Persist uploaded files (Excel imports, generated reports) across rebuilds
+      - app-storage:/var/www/html/storage/app
+    restart: unless-stopped
+
+  # ── MySQL 8 ──────────────────────────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    container_name: msme-db
+    environment:
+      MYSQL_DATABASE:      msme_tracker
+      MYSQL_USER:          msme_user
+      MYSQL_PASSWORD:      secret
+      MYSQL_ROOT_PASSWORD: root_secret
+    volumes:
+      - db-data:/var/lib/mysql
+    ports:
+      - "3307:3306"       # 3307 on host avoids conflict with local MySQL
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "msme_user", "-psecret"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Redis 7 (sessions + cache + queues) ──────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: msme-redis
+    command: redis-server --requirepass redis_secret
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  # ── Ollama (local LLM — vendor classification + fuzzy matching) ──────────
+  # Pull the model once after first start:
+  #   docker compose exec ollama ollama pull qwen2.5:3b
+  ollama:
+    image: ollama/ollama
+    container_name: msme-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  redis-data:
+  ollama-data:
+  app-storage:
