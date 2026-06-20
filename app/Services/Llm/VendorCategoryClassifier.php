@@ -5,11 +5,16 @@ namespace App\Services\Llm;
 use App\Contracts\LlmClient;
 use App\DTOs\LlmClassificationResult;
 use App\Enums\VendorCategory;
+use App\Services\Knowledge\RagContextBuilder;
 use Illuminate\Support\Facades\Log;
 
 /**
  * Uses an LLM to suggest an MSME category for an unclassified vendor based
  * on its business name, GSTIN state prefix, and any other available signals.
+ *
+ * When a RagContextBuilder is provided, the prompt is enriched with real
+ * examples of similarly-named vendors already classified in this tenant's
+ * database, improving accuracy over generic rules alone.
  *
  * Udyam turnover thresholds (as of FY 2021-22):
  *   Micro  : Turnover ≤ ₹5 crore
@@ -24,8 +29,10 @@ use Illuminate\Support\Facades\Log;
 class VendorCategoryClassifier
 {
     public function __construct(
-        private readonly LlmClient $client,
-        private readonly float        $confidenceThreshold,
+        private readonly LlmClient          $client,
+        private readonly float              $confidenceThreshold,
+        private readonly ?RagContextBuilder $ragContext = null,
+        private readonly ?int               $tenantId   = null,
     ) {}
 
     /**
@@ -51,6 +58,15 @@ class VendorCategoryClassifier
         }
         $context = $contextLines ? implode("\n", $contextLines) . "\n" : '';
 
+        // Retrieve similar vendors already classified in this tenant's database
+        $ragSection = '';
+        if ($this->ragContext !== null && $this->tenantId !== null) {
+            $ragText = $this->ragContext->getVendorContext($this->tenantId, $vendorName);
+            if ($ragText !== '') {
+                $ragSection = "\n{$ragText}\n";
+            }
+        }
+
         $prompt = <<<PROMPT
 You are an MSME classification assistant for India's Udyam registration system.
 
@@ -61,8 +77,8 @@ Udyam categories by annual turnover:
 - large:   Turnover > ₹250 crore (NOT covered by Section 43B(h))
 
 Vendor name: "{$vendorName}"
-{$context}
-Classify this vendor based on its business name and any available context.
+{$context}{$ragSection}
+Classify this vendor based on its business name, any available context, and the known vendor examples above.
 
 Guidelines:
 - "Works", "Industries", "Traders", "Enterprises", "Supplier" in the name → likely micro or small

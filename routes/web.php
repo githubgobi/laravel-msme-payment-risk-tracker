@@ -4,6 +4,7 @@ use App\Http\Controllers\AlertController;
 use App\Http\Controllers\CalculatorController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ImpersonateController;
+use App\Http\Controllers\KnowledgeController;
 use App\Http\Controllers\LlmClassifyController;
 use App\Http\Controllers\ImportController;
 use App\Http\Controllers\InvoiceController;
@@ -134,4 +135,11 @@ Route::middleware(['auth', 'tenant.user', 'tenant.active', 'onboarding'])->group
 
     // AI status endpoint
     Route::get('/ai/status', [LlmClassifyController::class, 'status'])->name('ai.status');
+
+    // Knowledge base (RAG)
+    Route::get('/knowledge',                    [KnowledgeController::class, 'index'])->name('knowledge.index');
+    Route::get('/knowledge/stats',              [KnowledgeController::class, 'stats'])->name('knowledge.stats');
+    Route::post('/knowledge/search',            [KnowledgeController::class, 'search'])->name('knowledge.search');
+    Route::post('/knowledge/ingest/vendors',    [KnowledgeController::class, 'ingestVendors'])->name('knowledge.ingest.vendors');
+    Route::delete('/knowledge/{id}',            [KnowledgeController::class, 'destroy'])->name('knowledge.destroy');
 });

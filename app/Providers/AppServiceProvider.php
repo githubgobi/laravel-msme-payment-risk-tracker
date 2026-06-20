@@ -4,6 +4,13 @@ namespace App\Providers;
 
 use App\Contracts\LlmClient;
 use App\Services\Import\VendorMatcher;
+use App\Services\Knowledge\CosineSimilarity;
+use App\Services\Knowledge\DocumentChunker;
+use App\Services\Knowledge\EmbeddingService;
+use App\Services\Knowledge\HashEmbedder;
+use App\Services\Knowledge\KnowledgeRepository;
+use App\Services\Knowledge\RagContextBuilder;
+use App\Services\Knowledge\VendorIngester;
 use App\Services\Llm\VendorCategoryClassifier;
 use App\Services\Llm\VendorFuzzyMatcher;
 use App\Services\OllamaClient;
@@ -31,9 +38,34 @@ class AppServiceProvider extends ServiceProvider
             maxCandidates:       config('llm.max_match_candidates'),
         ));
 
+        $this->app->singleton(HashEmbedder::class, fn () => new HashEmbedder());
+
+        $this->app->singleton(EmbeddingService::class, fn ($app) => new EmbeddingService(
+            endpoint:  config('llm.endpoint'),
+            chatModel: config('llm.model'),
+            timeout:   min(10, config('llm.timeout')),
+            hasher:    $app->make(HashEmbedder::class),
+        ));
+
+        $this->app->singleton(KnowledgeRepository::class, fn ($app) => new KnowledgeRepository(
+            chunker:    new DocumentChunker(),
+            embedder:   $app->make(EmbeddingService::class),
+            similarity: new CosineSimilarity(),
+        ));
+
+        $this->app->singleton(RagContextBuilder::class, fn ($app) => new RagContextBuilder(
+            repository: $app->make(KnowledgeRepository::class),
+        ));
+
+        $this->app->singleton(VendorIngester::class, fn ($app) => new VendorIngester(
+            repository: $app->make(KnowledgeRepository::class),
+        ));
+
         $this->app->singleton(VendorCategoryClassifier::class, fn ($app) => new VendorCategoryClassifier(
             client:              $app->make(OllamaClient::class),
             confidenceThreshold: config('llm.confidence_threshold'),
+            ragContext:          config('llm.enabled') ? $app->make(RagContextBuilder::class) : null,
+            tenantId:            auth()->user()?->tenant_id,
         ));
 
         // Override VendorMatcher binding to inject LLM matcher when enabled
