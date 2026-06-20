@@ -4,6 +4,8 @@ namespace App\Providers;
 
 use App\Contracts\LlmClient;
 use App\Services\Import\VendorMatcher;
+use Dedoc\Scramble\Scramble;
+use Illuminate\Routing\Route as LaravelRoute;
 use App\Services\Knowledge\CosineSimilarity;
 use App\Services\Knowledge\DocumentChunker;
 use App\Services\Knowledge\EmbeddingService;
@@ -77,6 +79,36 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureRateLimiting();
+        $this->configureOpenApi();
+    }
+
+    private function configureOpenApi(): void
+    {
+        // Document JSON-returning endpoints: vendors, knowledge, invoices, calculator, reports, health
+        $documented = [
+            'vendors/ai-classify-batch',
+            'vendors/{vendor}/ai-classify',
+            'knowledge/stats',
+            'knowledge/search',
+            'knowledge/ingest/vendors',
+            'knowledge/{id}',
+            'invoices',
+            'invoices/{invoice}',
+            'invoices/{invoice}/payments',
+            'invoices/{invoice}/payments/{payment}',
+            'calculator/compute',
+            'health',
+            'ai/status',
+        ];
+
+        Scramble::routes(function (LaravelRoute $route) use ($documented): bool {
+            foreach ($documented as $pattern) {
+                if (fnmatch($pattern, $route->uri()) || $route->uri() === $pattern) {
+                    return true;
+                }
+            }
+            return false;
+        });
     }
 
     private function configureRateLimiting(): void

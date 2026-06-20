@@ -3,6 +3,7 @@
 use App\Http\Controllers\AlertController;
 use App\Http\Controllers\CalculatorController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\HealthController;
 use App\Http\Controllers\ImpersonateController;
 use App\Http\Controllers\KnowledgeController;
 use App\Http\Controllers\LlmClassifyController;
@@ -26,6 +27,9 @@ use Inertia\Inertia;
 Route::get('/', function () {
     return Auth::check() ? redirect('/dashboard') : redirect('/login');
 });
+
+// Infrastructure health check — public, no auth; consumed by uptime monitors and K8s probes
+Route::get('/health', HealthController::class)->name('health')->middleware('throttle:60,1');
 
 // Razorpay webhook — public (no auth, no CSRF); HMAC-verified inside controller
 Route::post('/webhooks/razorpay', [WebhookController::class, 'razorpay'])

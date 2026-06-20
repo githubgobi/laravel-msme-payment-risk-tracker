@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\VendorCategory;
 use App\Enums\VendorVerificationSource;
 use App\Models\Vendor;
+use App\Prompts\VendorClassificationPrompt;
 use App\Services\Llm\VendorCategoryClassifier;
 use App\Services\VendorClassificationService;
 use Illuminate\Http\JsonResponse;
@@ -58,23 +59,24 @@ class LlmClassifyController extends Controller
             vendorName: $vendor->name,
             gstin:      $vendor->gstin,
             state:      $vendor->state,
+            tenantId:   auth()->user()->tenant_id,
         );
 
         if ($result === null) {
             return response()->json([
                 'error' => 'AI service unavailable. Ensure Ollama is running with model: ' . config('llm.model'),
-            ], 503);
+            ], 503)->header('X-Prompt-Version', VendorClassificationPrompt::VERSION);
         }
 
         return response()->json([
-            'vendor_id'    => $vendor->id,
-            'vendor_name'  => $vendor->name,
-            'category'     => $result->category->value,
+            'vendor_id'      => $vendor->id,
+            'vendor_name'    => $vendor->name,
+            'category'       => $result->category->value,
             'category_label' => $result->category->label(),
-            'confidence'   => $result->confidence,
-            'reasoning'    => $result->reasoning,
-            'auto_applied' => false,
-        ]);
+            'confidence'     => $result->confidence,
+            'reasoning'      => $result->reasoning,
+            'auto_applied'   => false,
+        ])->header('X-Prompt-Version', VendorClassificationPrompt::VERSION);
     }
 
     /**
@@ -127,11 +129,14 @@ class LlmClassifyController extends Controller
         $failed    = 0;
         $results   = [];
 
+        $tenantId = auth()->user()->tenant_id;
+
         foreach ($vendors as $vendor) {
             $result = $this->classifier->classify(
                 vendorName: $vendor->name,
                 gstin:      $vendor->gstin,
                 state:      $vendor->state,
+                tenantId:   $tenantId,
             );
 
             if ($result === null) {
@@ -174,7 +179,7 @@ class LlmClassifyController extends Controller
                 'failed'    => $failed,
             ],
             'results' => $results,
-        ]);
+        ])->header('X-Prompt-Version', VendorClassificationPrompt::VERSION);
     }
 
     /**
