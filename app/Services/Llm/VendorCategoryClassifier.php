@@ -5,6 +5,7 @@ namespace App\Services\Llm;
 use App\Contracts\LlmClient;
 use App\DTOs\LlmClassificationResult;
 use App\Enums\VendorCategory;
+use App\Prompts\VendorClassificationPrompt;
 use App\Services\Knowledge\RagContextBuilder;
 use Illuminate\Support\Facades\Log;
 
@@ -45,12 +46,13 @@ class VendorCategoryClassifier
      */
     public function classify(
         string  $vendorName,
-        ?string $gstin = null,
-        ?string $state = null,
+        ?string $gstin     = null,
+        ?string $state     = null,
+        ?int    $tenantId  = null,
     ): ?LlmClassificationResult {
         $contextLines = [];
         if ($gstin) {
-            $stateCode     = substr($gstin, 0, 2);
+            $stateCode      = substr($gstin, 0, 2);
             $contextLines[] = "GSTIN: {$gstin} (state code: {$stateCode})";
         }
         if ($state) {
@@ -58,38 +60,17 @@ class VendorCategoryClassifier
         }
         $context = $contextLines ? implode("\n", $contextLines) . "\n" : '';
 
-        // Retrieve similar vendors already classified in this tenant's database
+        $effectiveTenantId = $tenantId ?? $this->tenantId;
+
         $ragSection = '';
-        if ($this->ragContext !== null && $this->tenantId !== null) {
-            $ragText = $this->ragContext->getVendorContext($this->tenantId, $vendorName);
+        if ($this->ragContext !== null && $effectiveTenantId !== null) {
+            $ragText = $this->ragContext->getVendorContext($effectiveTenantId, $vendorName);
             if ($ragText !== '') {
                 $ragSection = "\n{$ragText}\n";
             }
         }
 
-        $prompt = <<<PROMPT
-You are an MSME classification assistant for India's Udyam registration system.
-
-Udyam categories by annual turnover:
-- micro:   Turnover ≤ ₹5 crore
-- small:   Turnover ≤ ₹50 crore
-- medium:  Turnover ≤ ₹250 crore
-- large:   Turnover > ₹250 crore (NOT covered by Section 43B(h))
-
-Vendor name: "{$vendorName}"
-{$context}{$ragSection}
-Classify this vendor based on its business name, any available context, and the known vendor examples above.
-
-Guidelines:
-- "Works", "Industries", "Traders", "Enterprises", "Supplier" in the name → likely micro or small
-- National brands, banks, MNCs, listed companies → large
-- When genuinely uncertain, prefer micro or small (conservative for tax compliance)
-- Return only one of: micro, small, medium, large
-
-Respond ONLY with valid JSON. Do not include any other text.
-
-{"category": "micro|small|medium|large", "confidence": <float 0.0 to 1.0>, "reasoning": "<one sentence>"}
-PROMPT;
+        $prompt = (new VendorClassificationPrompt($vendorName, $context, $ragSection))->build();
 
         $raw = $this->client->generate($prompt);
 

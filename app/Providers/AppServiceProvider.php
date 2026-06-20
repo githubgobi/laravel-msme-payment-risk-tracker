@@ -65,7 +65,6 @@ class AppServiceProvider extends ServiceProvider
             client:              $app->make(OllamaClient::class),
             confidenceThreshold: config('llm.confidence_threshold'),
             ragContext:          config('llm.enabled') ? $app->make(RagContextBuilder::class) : null,
-            tenantId:            auth()->user()?->tenant_id,
         ));
 
         // Override VendorMatcher binding to inject LLM matcher when enabled

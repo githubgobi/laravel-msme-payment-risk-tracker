@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\Log;
  * Only classified (non-Unclassified) vendors are indexed — Unclassified records
  * carry no useful signal for RAG retrieval.
  */
-final class VendorIngester
+class VendorIngester
 {
     public function __construct(
         private readonly KnowledgeRepository $repository,

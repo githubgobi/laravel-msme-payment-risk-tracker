@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Log;
  * Exceptions are caught and logged here so the import pipeline is never
  * interrupted by LLM availability issues.
  */
-final class OllamaClient implements LlmClient
+class OllamaClient implements LlmClient
 {
     private string $endpoint;
     private string $model;

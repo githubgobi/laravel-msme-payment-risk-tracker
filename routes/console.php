@@ -44,6 +44,15 @@ Schedule::command('subscriptions:sync')
     ->runInBackground()
     ->appendOutputTo(storage_path('logs/scheduler-subscriptions.log'));
 
+// AI vendor classification — runs nightly at 23:30 UTC (05:00 IST)
+// Auto-classifies Unclassified vendors via LLM and re-indexes the RAG knowledge base
+Schedule::command('ai:classify-vendors')
+    ->dailyAt('23:30')
+    ->timezone('UTC')
+    ->withoutOverlapping(90)
+    ->runInBackground()
+    ->appendOutputTo(storage_path('logs/scheduler-ai-classify.log'));
+
 // Prune old audit log entries — runs Sunday at 01:00 UTC
 // Section 43B(h) compliance requires 8-year audit trail retention
 // Only deletes records older than 10 years as a safety margin
